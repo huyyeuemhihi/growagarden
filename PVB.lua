@@ -245,7 +245,7 @@ end)
 Tabs.Shop:AddToggle("AutoBuySeed", {Title="Auto Buy Seed", Default=false}):OnChanged(function(Value)
     task.spawn(function()
         while Options.AutoBuySeed.Value do
-            if seeddachon and #seeddachon > 0 then buyseed() end
+            if seeddachon and #seeddachon > 0 then autobuyseed() end
             task.wait(0.5)
         end
     end)
@@ -260,7 +260,7 @@ end)
 Tabs.Shop:AddToggle("AutoBuyGear", {Title="Auto Buy Gear", Default=false}):OnChanged(function(Value)
     task.spawn(function()
         while Options.AutoBuyGear.Value do
-            if geardachon and #geardachon > 0 then buygear() end
+            if geardachon and #geardachon > 0 then autobuygear() end
             task.wait(0.5)
         end
     end)
