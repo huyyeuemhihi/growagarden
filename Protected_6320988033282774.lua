@@ -248,9 +248,9 @@ Tab:Toggle({
         KillAuraActive = Value
         if Value then
             enableNoclip()
-            task.spawn(startAutoEquip)
-            task.spawn(killaura)
-            task.spawn(tweenToOneMob)
+            startAutoEquip()
+            killaura()
+            tweenToOneMob()
         else
             disableNoclip()
             stopAutoEquip()
