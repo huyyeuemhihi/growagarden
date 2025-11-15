@@ -11,10 +11,34 @@ local backpack = LocalPlayer:WaitForChild("Backpack")
 local attackEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AttacksServer"):WaitForChild("WeaponAttack")
 local missionFolder = workspace:WaitForChild("ScriptedMap"):WaitForChild("MissionBrainrots")
 
+local Seeds = {"Cactus Seed", "Strawberry Seed", "Pumpkin Seed", "Sunflower Seed", "Dragon Fruit Seed", "Eggplant Seed", "Watermelon Seed", "Grape Seed", "Cocotank Seed", "Carnivorous Plant Seed", "Mr Carrot Seed", "Tomatrio Seed", "Shroobino Seed", "Mango Seed", "King Limone Seed", "Starfruit Seed"}
+local Gears = {"Water Bucket", "Frost Grenade", "Banana Gun", "Frost Blower", "Carrot Laucher"}
 
 LocalPlayer.Idled:Connect(function()
 VirtualUser:CaptureController()
 end)
+
+
+-- buy seed
+local seeddachon = {}
+local function autobuyseed()
+    for _, seed in pairs(seeddachon) do
+        game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("BuyItem"):FireServer(seed, true)
+        task.wait(0.1)
+    end
+end
+
+
+-- buy gear
+local geardachon = {}
+local function autobuygear()
+    for _, gear in pairs(geardachon) do
+        game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("BuyGear"):FireServer(gear, true)
+        task.wait(0.1)
+    end
+end
+
+
 
 
 local equipen = false
@@ -176,7 +200,7 @@ local Tabs = {
     Player = Window:AddTab({ Title = "Player", Icon = "" })
 }
 
-
+local Options = Fluent.Options
 
 
 Tabs.Farm:AddToggle("killaura", {Title="Auto Farm", Default=false}):OnChanged(function(Value)
@@ -211,6 +235,36 @@ Tabs.Farm:AddToggle("autoeq", {Title="Auto Equip", Default=false}):OnChanged(fun
 end)
 
 
+Tabs.Shop:AddDropdown("Select Seed", {Title="Select Seed", Values=Seeds, Multi=true, Default=""}):OnChanged(function(Value)
+    seeddachon = {}
+    for val, _ in pairs(Value) do
+        table.insert(seeddachon, val)
+    end
+end)
+
+Tabs.Shop:AddToggle("AutoBuySeed", {Title="Auto Buy Seed", Default=false}):OnChanged(function(Value)
+    task.spawn(function()
+        while Options.AutoBuySeed.Value do
+            if seeddachon and #seeddachon > 0 then buyseed() end
+            task.wait(0.5)
+        end
+    end)
+end)
+
+
+Tabs.Shop:AddDropdown("Select Gear", {Title="Select Gear", Values=Gears, Multi=true, Default=""}):OnChanged(function(Value)
+    geardachon = {}
+    for val, _ in pairs(Value) do table.insert(geardachon, val) end
+end)
+
+Tabs.Shop:AddToggle("AutoBuyGear", {Title="Auto Buy Gear", Default=false}):OnChanged(function(Value)
+    task.spawn(function()
+        while Options.AutoBuyGear.Value do
+            if geardachon and #geardachon > 0 then buygear() end
+            task.wait(0.5)
+        end
+    end)
+end)
 
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
