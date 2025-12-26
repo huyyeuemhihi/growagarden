@@ -1,18 +1,16 @@
--- UI
+-- ===== UI =====
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
-
 local Window = Rayfield:CreateWindow({
-    Name = "Tween + NoCD Attack",
-    LoadingTitle = "Fly On Mob",
-    LoadingSubtitle = "Trieudz",
+    Name = "Block Kid",
+    LoadingTitle = "Skidd is my life",
+    LoadingSubtitle = "Huyyy",
     Theme = "Default",
     ToggleUIKeybind = Enum.KeyCode.K,
     ConfigurationSaving = { Enabled = false }
 })
-
 local Tab = Window:CreateTab("Main")
 
--- SERVICES
+-- ===== SERVICES =====
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -30,25 +28,25 @@ Player.CharacterAdded:Connect(function(char)
     Humanoid = char:WaitForChild("Humanoid")
 end)
 
--- SETTINGS
+-- ===== SETTINGS =====
 local Settings = {
     AutoFarm = false,
-    TweenHeight = 30,
-    TweenTime = 350, -- Default Speed
-    ClickDelay = 0, -- Set to 0 for fastest attack
+    TweenHeight = 28,
+    TweenSpeed = 350,
+    BringRadius = 150
 }
 
--- NOCLIP
+local SelectedWeapon = "Sword"
+
+-- ===== NOCLIP =====
 local noclipConnection
-local function ToggleNoclip(enabled)
-    if enabled then
+local function ToggleNoclip(state)
+    if state then
         if noclipConnection then return end
         noclipConnection = RunService.Stepped:Connect(function()
-            if Character then
-                for _, part in pairs(Character:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                    end
+            for _, v in pairs(Character:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    v.CanCollide = false
                 end
             end
         end)
@@ -60,133 +58,145 @@ local function ToggleNoclip(enabled)
     end
 end
 
--- FUNCTIONS
-
--- Tự động cầm Melee
-local function EquipMelee()
-    local inventory = Player.Backpack
-    local char = Character
-    if not char then return end
-    
-    -- Tìm Melee trong Backpack
-    for _, tool in pairs(inventory:GetChildren()) do
-        if tool:IsA("Tool") and (tool.ToolTip == "Melee" or tool:FindFirstChild("Melee")) then
-            Humanoid:EquipTool(tool)
-            task.wait(0.5)
-            return
+-- ===== EQUIP WEAPON =====
+local function EquipWeapon()
+    local tool = Character:FindFirstChildOfClass("Tool")
+    if tool and (tool.Name == SelectedWeapon or tool.ToolTip == SelectedWeapon) then return end
+    for _, t in pairs(Player.Backpack:GetChildren()) do
+        if t:IsA("Tool") and (t.Name == SelectedWeapon or t.ToolTip == SelectedWeapon) then
+            Humanoid:EquipTool(t)
+            break
         end
     end
 end
 
--- Kiểm tra mob còn sống
-local function isAlive(mob)
-    local hum = mob:FindFirstChild("Humanoid")
-    return hum and hum.Health > 0
+-- ===== MOB FUNCTIONS =====
+local function Alive(m)
+    local h = m:FindFirstChild("Humanoid")
+    return h and h.Health > 0
 end
 
--- Lấy mob gần nhất
 local function GetNearestMob()
-    local nearest = nil
-    local nearestDist = math.huge
-    local pos = HRP.Position
-
-    for _, mob in pairs(Workspace:WaitForChild("Enemies"):GetChildren()) do
-        if mob:IsA("Model") and isAlive(mob) then
-            local mHRP = mob:FindFirstChild("HumanoidRootPart")
-            if mHRP then
-                local dist = (mHRP.Position - pos).Magnitude
-                if dist < nearestDist then
-                    nearestDist = dist
-                    nearest = mob
-                end
+    local nearest, dist = nil, math.huge
+    for _, m in pairs(Workspace.Enemies:GetChildren()) do
+        if m:IsA("Model") and Alive(m) and m:FindFirstChild("HumanoidRootPart") then
+            local d = (m.HumanoidRootPart.Position - HRP.Position).Magnitude
+            if d < dist then
+                dist = d
+                nearest = m
             end
         end
     end
     return nearest
 end
 
--- Tween tới mob (Dùng TweenService)
+-- ===== TWEEN PLAYER TO TARGET + BRING + LOCK TARGET =====
+-- ===== TWEEN PLAYER TO TARGET + BRING + LOCK TARGET =====
 local currentTween
-local function TweenToMob(mob)
-    if not mob then return end
-    local targetHRP = mob:FindFirstChild("HumanoidRootPart")
-    if not targetHRP then return end
+local function TweenToTargetAndBring(targetMob)
+    if not targetMob or not targetMob:FindFirstChild("HumanoidRootPart") then return end
+    local targetHRP = targetMob.HumanoidRootPart
 
-    local targetCFrame = CFrame.new(targetHRP.Position + Vector3.new(0, Settings.TweenHeight, 0))
-    
-    if currentTween then
-        currentTween:Cancel()
-    end
+    -- Tween player lên trên đầu target mob
+    local targetPos = targetHRP.Position + Vector3.new(-4, Settings.TweenHeight, 5)
+    local targetCFrame = CFrame.new(targetPos, targetPos + targetHRP.CFrame.LookVector)
 
-    local dist = (HRP.Position - targetCFrame.Position).Magnitude
-    local tweenTime = dist / Settings.TweenTime
-    
+    if currentTween then currentTween:Cancel() end
+
+    local dist = (HRP.Position - targetPos).Magnitude
+    local tweenTime = dist / Settings.TweenSpeed
+
     currentTween = TweenService:Create(HRP, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
     currentTween:Play()
-    HRP.Velocity = Vector3.new(0, 0, 0)
-end
+    HRP.Velocity = Vector3.new(0,0,0)
 
--- Attack No CoolDown (Tối ưu tốc độ)
-local function AttackNoCoolDown()
-    local char = Character
-    if not char then return end
-    local tool = char:FindFirstChildOfClass("Tool")
-    if not tool then return end
-
-    local mob = GetNearestMob()
-    if mob then
-        local HRPMob = mob:FindFirstChild("HumanoidRootPart")
-        if HRPMob then
-            pcall(function()
-                if tool:FindFirstChild("LeftClickRemote") then
-                    local dir = (HRPMob.Position - HRP.Position).Unit
-                    tool.LeftClickRemote:FireServer(di)
-                else
-                    local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
-                    local RA = Net:WaitForChild("RE/RegisterAttack")
-                    local RH = Net:WaitForChild("RE/RegisterHit")
-                    RA:FireServer(0)
-                    RH:FireServer(HRPMob, {{mob, HRPMob}})
-                end
-            end)
-        end
-    end
-end
-
--- MAIN LOOP
-task.spawn(function()
-    while true do
-        if Settings.ClickDelay > 0 then
-            task.wait(Settings.ClickDelay)
-        else
-            RunService.Heartbeat:Wait()
+    -- Khi tween hoàn tất, lock mob target và bring mob xung quanh
+    currentTween.Completed:Connect(function()
+        -- Anchor mob target để đứng yên
+        if targetMob:FindFirstChild("Humanoid") then
+            targetMob.Humanoid.JumpPower = 0
+            targetMob.Humanoid.WalkSpeed = 0
         end
 
-        if Settings.AutoFarm then
-            local mob = GetNearestMob()
-            if mob then
-                -- Cầm vũ khí
-                EquipMelee()
-                -- Tween tới mob
-                task.spawn(function()
-                    TweenToMob(mob)
-                end)
-                -- Tấn công
-                AttackNoCoolDown()
-            else
-                -- Nếu không thấy mob, giữ nguyên vị trí trên không và dừng vận tốc
-                HRP.Velocity = Vector3.new(0, 0, 0)
-                if currentTween then
-                    currentTween:Cancel()
+        -- Bring các mob xung quanh ổn định
+        for _, m in pairs(Workspace.Enemies:GetChildren()) do
+            if m ~= targetMob and Alive(m) and m:FindFirstChild("HumanoidRootPart") then
+                local hrp = m.HumanoidRootPart
+                local distanceToTarget = (hrp.Position - targetHRP.Position).Magnitude
+                if distanceToTarget <= Settings.BringRadius then
+                    hrp.CanCollide = false
+                    -- Tween mob xung quanh đến vị trí gần target
+                    local goalCFrame = targetHRP.CFrame * CFrame.new(math.random(-0.5,0.5),0,math.random(-0.5,0.5))
+                    local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Linear)
+                    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = goalCFrame})
+                    tween:Play()
                 end
             end
         end
+    end)
+end
+
+
+-- ===== ATTACK MAX SPEED =====
+local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
+local RA = Net:WaitForChild("RE/RegisterAttack")
+local RH = Net:WaitForChild("RE/RegisterHit")
+
+-- ===== ATTACK MAX SPEED =====
+task.spawn(function()
+    while true do
+        if Settings.AutoFarm then
+            EquipWeapon()
+            local tool = Character:FindFirstChildOfClass("Tool")
+            if tool then
+                for _, m in pairs(Workspace.Enemies:GetChildren()) do
+                    if Alive(m) and m:FindFirstChild("HumanoidRootPart") then
+                        local hrpMob = m.HumanoidRootPart
+                        local distance = (hrpMob.Position - HRP.Position).Magnitude
+                        if distance <= Settings.BringRadius then
+                            pcall(function()
+                                if tool:FindFirstChild("LeftClickRemote") then
+                                    tool.LeftClickRemote:FireServer((hrpMob.Position - HRP.Position).Unit)
+                                else
+                                    RA:FireServer(0)
+                                    RH:FireServer(hrpMob, {{m, hrpMob}})
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0)
     end
 end)
 
--- UI
+
+-- ===== MOVE LOOP =====
+task.spawn(function()
+    while true do
+        if Settings.AutoFarm then
+            local mob = GetNearestMob()
+            if mob then
+                TweenToTargetAndBring(mob)
+            end
+        end
+        RunService.Heartbeat:Wait()
+    end
+end)
+
+-- ===== UI =====
+Tab:CreateDropdown({
+    Name = "Select Weapon",
+    Options = {"Melee", "Sword", "Fruit", "Gun"},
+    CurrentOption = "Melee",
+    Callback = function(v)
+        SelectedWeapon = v
+    end
+})
+
 Tab:CreateToggle({
-    Name = "Auto Farm (Tween + Attack + NoClip)",
+    Name = "Auto Farm (MAX ATTACK)",
     CurrentValue = false,
     Callback = function(v)
         Settings.AutoFarm = v
@@ -195,31 +205,21 @@ Tab:CreateToggle({
 })
 
 Tab:CreateSlider({
-    Name = "Chiều cao Tween",
-    Range = {1, 30},
-    Increment = 1,
-    CurrentValue = Settings.TweenHeight,
-    Callback = function(v)
-        Settings.TweenHeight = v
-    end
-})
-
-Tab:CreateSlider({
     Name = "Tốc độ Tween (Speed)",
-    Range = {10, 500},
+    Range = {300, 500},
     Increment = 1,
-    CurrentValue = Settings.TweenTime,
+    CurrentValue = Settings.TweenSpeed,
     Callback = function(v)
-        Settings.TweenTime = v
+        Settings.TweenSpeed = v
     end
 })
 
 Tab:CreateSlider({
-    Name = "Delay Attack",
-    Range = {0.01, 0.3},
-    Increment = 0.01,
-    CurrentValue = Settings.ClickDelay,
+    Name = "Radius Bring Mob",
+    Range = {100, 300},
+    Increment = 1,
+    CurrentValue = Settings.BringRadius,
     Callback = function(v)
-        Settings.ClickDelay = v
+        Settings.BringRadius = v
     end
 })
