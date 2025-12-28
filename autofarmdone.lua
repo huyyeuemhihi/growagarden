@@ -95,7 +95,7 @@ local function UpdateHover()
     if not HRP then return end
     local bv = HRP:FindFirstChild("FarmHover")
 
-    if Settings.FarmNearest then
+    if Settings.FarmNearest or Settings.AutoFarm then
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.Name = "FarmHover"
@@ -630,3 +630,4 @@ Tab:CreateToggle({
     end
 })
 Rayfield:LoadConfiguration()
+
