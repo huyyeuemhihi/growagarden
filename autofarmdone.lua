@@ -563,7 +563,7 @@ task.spawn(function()
                                     end
                                     -- Đưa về tâm
                                     if m ~= targetMob then
-                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, math.random(-2,2)/3)
+                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, math.random(-2,2)/2)
                                         mhrp.Velocity = Vector3.new(0,0,0)
                                     end
                                     m.Humanoid.WalkSpeed = 0
@@ -582,7 +582,7 @@ task.spawn(function()
                 if Settings.AutoFarm and Player.PlayerGui.Main.Quest.Visible then
                     if currentTween then currentTween:Cancel() end
                     local distToM = (HRP.Position - PosM.p).Magnitude
-                    currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 20, 0)})
+                    currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 10, 0)})
                     currentTween:Play()
                 end
             end
@@ -744,5 +744,6 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
+
 
 
