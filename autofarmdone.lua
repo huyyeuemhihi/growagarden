@@ -628,7 +628,7 @@ task.spawn(function()
                     if #targets > 0 then
                         EquipWeapon()
                         if Character:FindFirstChildOfClass("Tool") then
-                            RegisterAttack:FireServer()
+                            RegisterAttack:FireServer(0.01)
                             RegisterHit:FireServer(targets[1][2], targets)
                         end
                     end
@@ -730,3 +730,4 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
+
