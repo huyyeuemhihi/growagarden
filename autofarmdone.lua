@@ -711,6 +711,14 @@ Setting:CreateSlider({
     Callback = function(v) Settings.TweenSpeed = v end
 })
 
+Setting:CreateSlider({
+    Name = "Bring Distance",
+    Range = {150, 400},
+    Increment = 10,
+    CurrentValue = 200,
+    Callback = function(v) Settings.BringRadius = v end
+})
+
 Tab:CreateToggle({
     Name = "Auto Farm Nearest",
     CurrentValue = false,
@@ -748,6 +756,7 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
+
 
 
 
