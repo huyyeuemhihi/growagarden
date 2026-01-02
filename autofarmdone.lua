@@ -44,6 +44,8 @@ _G.Settings = {
     BringRadius = 200,
     AutoStatEnabled = false,
     StatTarget = "Melee",
+    AutoEquip = true,
+    Weapon = "Melee"
 }
 local Settings = _G.Settings
 local currentTween
@@ -148,6 +150,31 @@ local function AddStat(name, amount)
     end
 end
 
+
+local function EquipWeapon()
+    if not Settings.AutoEquip then return end
+    
+    -- Nếu đã cầm đúng loại vũ khí rồi thì không chạy tiếp (tránh lag tay)
+    local currentTool = Character:FindFirstChildOfClass("Tool")
+    if currentTool and currentTool.ToolTip == Settings.Weapon then 
+        return 
+    end
+    
+    -- Nếu đang cầm sai loại hoặc không cầm gì, thì tìm trong Backpack
+    local inventory = Player.Backpack:GetChildren()
+    for _, tool in pairs(inventory) do
+        if tool:IsA("Tool") and tool.ToolTip == Settings.Weapon then
+            -- Cất vũ khí cũ nếu đang cầm sai loại
+            if currentTool then 
+                currentTool.Parent = Player.Backpack 
+            end
+            -- Trang bị vũ khí đúng
+            Humanoid:EquipTool(tool)
+            break
+        end
+    end
+end
+
 -- ===== LEVEL =====
 local function UpdateQuestData()
     local a = Player.Data.Level.Value
@@ -239,7 +266,7 @@ local function UpdateQuestData()
             CheckTeleport(PosQ.Position, Vector3.new(-7894, 5547, -380))
         elseif a >= 525 and a <= 549 then
             Mon = "Royal Squad"; Qdata = 1; Qname = "SkyExp2Quest"; NameMon = "Royal Squad"
-            PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7624, 5658, -1467)
+            PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7635, 5637, -1408)
         elseif a >= 550 and a <= 624 then
             Mon = "Royal Guard"; Qname = "SkyExp2Quest"; Qdata = 2; NameMon = "Royal Guard"
             PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7658, 5623, -1450)
@@ -552,7 +579,7 @@ task.spawn(function()
     end
 end)
 
--- ===== EXTREME ATTACK SYSTEM (GIỮ NGUYÊN) =====
+
 -- ===== EXTREME ATTACK SYSTEM (FIXED) =====
 task.spawn(function()
     local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
@@ -599,8 +626,11 @@ task.spawn(function()
                     end
 
                     if #targets > 0 then
-                        RegisterAttack:FireServer()
-                        RegisterHit:FireServer(targets[1][2], targets)
+                        EquipWeapon()
+                        if Character:FindFirstChildOfClass("Tool") then
+                            RegisterAttack:FireServer()
+                            RegisterHit:FireServer(targets[1][2], targets)
+                        end
                     end
                 end)
             end
@@ -621,6 +651,15 @@ task.spawn(function()
 end)
 
 -- ===== UI ELEMENTS =====
+Tab:CreateDropdown({
+   Name = "Select Weapon",
+   Options = {"Melee", "Sword", "Demon Fruit"},
+   CurrentOption = {"Melee"},
+   Callback = function(Option)
+      Settings.Weapon = Option[1]
+   end,
+})
+
 Tab:CreateToggle({
     Name = "Auto Farm Level",
     CurrentValue = false,
