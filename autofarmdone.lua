@@ -9,6 +9,8 @@ local Window = Rayfield:CreateWindow({
 })
 
 local Tab = Window:CreateTab("Main Farm")
+local StatsTab = Window:CreateTab("Stats & Points")
+local Setting = Window:CreateTab("Setting")
 
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
@@ -40,6 +42,8 @@ _G.Settings = {
     TweenHeight = 24,
     TweenSpeed = 350,
     BringRadius = 200,
+    AutoStatEnabled = false,
+    StatTarget = "Melee",
 }
 local Settings = _G.Settings
 local currentTween
@@ -91,15 +95,25 @@ local function ResetMobPhysics()
     end
 end
 
+local function CheckPlayerAlive()
+    if not Character or not Character.Parent or not Humanoid or Humanoid.Health <= 0 then
+        Character = Player.Character or Player.CharacterAdded:Wait()
+        HRP = Character:WaitForChild("HumanoidRootPart")
+        Humanoid = Character:WaitForChild("Humanoid")
+        return false -- Vừa hồi sinh, đợi vòng lặp sau farm tiếp
+    end
+    return true
+end
+
 local function UpdateHover()
-    if not HRP then return end
+    if not HRP then return end 
     local bv = HRP:FindFirstChild("FarmHover")
 
     if Settings.FarmNearest or Settings.AutoFarm then
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.Name = "FarmHover"
-            bv.MaxForce = Vector3.new(0, math.huge, 0)  -- chỉ chống trọng lực
+            bv.MaxForce = Vector3.new(0, math.huge, 0) 
             bv.Velocity = Vector3.new(0, 0, 0)
             bv.Parent = HRP
         else
@@ -121,6 +135,16 @@ local function ToggleNoclip(state)
         end)
     else
         if _G.NoclipConn then _G.NoclipConn:Disconnect(); _G.NoclipConn = nil end
+    end
+end
+
+
+local function AddStat(name, amount)
+    local remote = game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_")
+    if remote then
+        pcall(function()
+            remote:InvokeServer("AddPoint", name, 5)
+        end)
     end
 end
 
@@ -392,7 +416,16 @@ task.spawn(function()
     local isWaitingQuest = false
 
     while true do
-        game:GetService("RunService").Heartbeat:Wait()
+        task.wait()
+        if not Character or not Character.Parent or not HRP or not Humanoid or Humanoid.Health <= 0 then
+            Character = Player.Character
+            if Character then
+                HRP = Character:FindFirstChild("HumanoidRootPart")
+                Humanoid = Character:FindFirstChild("Humanoid")
+            end
+            if currentTween then currentTween:Cancel() end
+            continue -- Nhảy qua vòng lặp này để đợi nhân vật sẵn sàng
+        end
         
         if (Settings.AutoFarm or Settings.FarmNearest) and HRP and Humanoid.Health > 0 then
             
@@ -472,7 +505,7 @@ task.spawn(function()
                     HRP.Velocity = Vector3.new(0,0,0)
 
                     -- Logic Bring Mob (Gom quái y hệt farm level)
-                    if Settings.BringMob and (tick() - lastBringTick) >= 0.2 then
+                    if Settings.BringMob and (tick() - lastBringTick) >= 0.234 then
                         lastBringTick = tick()
                         for _, m in pairs(Workspace.Enemies:GetChildren()) do
                             -- Nếu farm Near thì gom mọi quái gần đó, nếu farm Level thì chỉ gom quái cùng tên
@@ -520,57 +553,57 @@ task.spawn(function()
 end)
 
 -- ===== EXTREME ATTACK SYSTEM (GIỮ NGUYÊN) =====
+-- ===== EXTREME ATTACK SYSTEM (FIXED) =====
 task.spawn(function()
     local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
     local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
     local RegisterHit = Net:WaitForChild("RE/RegisterHit")
 
     while true do
-        RunService.RenderStepped:Wait()
-        -- Sửa điều kiện: Chạy khi bật 1 trong 2 chế độ
-        if (Settings.AutoFarm or Settings.FarmNearest) and HRP and Humanoid.Health > 0 then
-            pcall(function()
-                local enemies = Workspace:FindFirstChild("Enemies")
-                if not enemies then return end
-                
-                local targets = {}
-                for _, m in pairs(enemies:GetChildren()) do
-                    if Alive(m) then
-                        local mHRP = m.HumanoidRootPart
-                        local dist = (mHRP.Position - HRP.Position).Magnitude
-                        
-                        -- LOGIC CHỌN MỤC TIÊU ĐỂ GÂY DAME
-                        local canHit = false
-                        if Settings.FarmNearest then
-                            -- Nếu farm Near: Chém tất cả quái trong tầm Bring + 50
-                            if dist <= (Settings.BringRadius or 250) + 50 then
-                                canHit = true
-                            end
-                        elseif Settings.AutoFarm then
-                            -- Nếu farm Level: Chỉ chém quái đúng tên nhiệm vụ
-                            if m.Name == NameMon and dist <= (Settings.BringRadius or 250) + 50 then
-                                canHit = true
-                            end
-                        end
+        task.wait() -- Đảm bảo vòng lặp mượt mà
 
-                        if canHit then
-                            table.insert(targets, {m, mHRP})
-                        end
-                    end
-                end
-
-                if #targets > 0 then
-                    -- Tự cầm vũ khí
-                    if not Character:FindFirstChildOfClass("Tool") then
-                        local tool = Player.Backpack:FindFirstChildOfClass("Tool")
-                        if tool then Humanoid:EquipTool(tool) end
-                    end
+        -- GỌI HÀM CỦA BẠN TẠI ĐÂY ĐỂ CẬP NHẬT CHARACTER/HRP/HUMANOID
+        if CheckPlayerAlive() then 
+            UpdateHover()
+            
+            -- Chỉ chạy Attack khi bật farm
+            if (Settings.AutoFarm or Settings.FarmNearest) then
+                pcall(function()
+                    local enemies = Workspace:FindFirstChild("Enemies")
+                    if not enemies then return end
                     
-                    -- Gửi lệnh chém (Gây sát thương lên TOÀN BỘ danh sách targets)
-                    RegisterAttack:FireServer()
-                    RegisterHit:FireServer(targets[1][2], targets)
-                end
-            end)
+                    local targets = {}
+                    for _, m in pairs(enemies:GetChildren()) do
+                        if Alive(m) then
+                            local mHRP = m:FindFirstChild("HumanoidRootPart")
+                            if mHRP then
+                                -- Sử dụng HRP đã được CheckPlayerAlive cập nhật mới nhất
+                                local dist = (mHRP.Position - HRP.Position).Magnitude
+                                
+                                local canHit = false
+                                if Settings.FarmNearest then
+                                    if dist <= (Settings.BringRadius or 250) + 50 then
+                                        canHit = true
+                                    end
+                                elseif Settings.AutoFarm then
+                                    if m.Name == NameMon and dist <= (Settings.BringRadius or 250) + 50 then
+                                        canHit = true
+                                    end
+                                end
+
+                                if canHit then
+                                    table.insert(targets, {m, mHRP})
+                                end
+                            end
+                        end
+                    end
+
+                    if #targets > 0 then
+                        RegisterAttack:FireServer()
+                        RegisterHit:FireServer(targets[1][2], targets)
+                    end
+                end)
+            end
         end
     end
 end)
@@ -604,7 +637,7 @@ Tab:CreateToggle({
     end
 })
 
-Tab:CreateToggle({
+Setting:CreateToggle({
     Name = "Bring Mob",
     CurrentValue = true,
     Callback = function(v)
@@ -613,7 +646,7 @@ Tab:CreateToggle({
     end
 })
 
-Tab:CreateSlider({
+Setting:CreateSlider({
     Name = "Tween Speed",
     Range = {100, 600},
     Increment = 10,
@@ -629,5 +662,32 @@ Tab:CreateToggle({
         if not v then if currentTween then currentTween:Cancel() end end
     end
 })
-Rayfield:LoadConfiguration()
 
+StatsTab:CreateDropdown({
+   Name = "Select Stat Type",
+   Options = {"Melee", "Defense", "Sword", "Gun", "Demon Fruit"},
+   CurrentOption = {"Melee"},
+   MultipleOptions = false,
+   Callback = function(Option)
+      Settings.StatTarget = Option[1]
+   end,
+})
+
+StatsTab:CreateToggle({
+   Name = "Auto Add Stats",
+   CurrentValue = false,
+   Callback = function(Value)
+       Settings.AutoStatEnabled = Value
+       if Value then
+           task.spawn(function()
+               while Settings.AutoStatEnabled do
+                   if Player.Data.Points.Value > 0 then
+                       AddStat(Settings.StatTarget, 1)
+                   end
+                   task.wait(0.5)
+               end
+           end)
+       end
+   end,
+})
+Rayfield:LoadConfiguration()
