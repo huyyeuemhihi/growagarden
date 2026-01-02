@@ -113,10 +113,13 @@ local function UpdateHover()
     local bv = HRP:FindFirstChild("FarmHover")
 
     if Settings.FarmNearest or Settings.AutoFarm then
+        HRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.Name = "FarmHover"
-            bv.MaxForce = Vector3.new(0, math.huge, 0) 
+            -- Khóa cả 3 trục để không bị trôi
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge) 
             bv.Velocity = Vector3.new(0, 0, 0)
             bv.Parent = HRP
         else
@@ -279,8 +282,8 @@ local function UpdateQuestData()
             Mon = "Royal Squad"; Qdata = 1; Qname = "SkyExp2Quest"; NameMon = "Royal Squad"
             PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7635, 5637, -1408)
         elseif a >= 550 and a <= 624 then
-            Mon = "Royal Guard"; Qname = "SkyExp2Quest"; Qdata = 2; NameMon = "Royal Guard"
-            PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7658, 5623, -1450)
+            Mon = "Royal Soldier"; Qname = "SkyExp2Quest"; Qdata = 2; NameMon = "Royal Soldier"
+            PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7836, 5681, -1792)
             CheckTeleport(PosQ.Position, Vector3.new(-7894, 5547, -380))
         elseif a >= 625 and a <= 649 then
             Mon = "Galley Pirate"; Qname = "FontaineQuest"; Qdata = 1; NameMon = "Galley Pirate"
@@ -582,7 +585,7 @@ task.spawn(function()
                 if Settings.AutoFarm and Player.PlayerGui.Main.Quest.Visible then
                     if currentTween then currentTween:Cancel() end
                     local distToM = (HRP.Position - PosM.p).Magnitude
-                    currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 10, 0)})
+                    currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 20, 0)})
                     currentTween:Play()
                 end
             end
@@ -646,7 +649,7 @@ task.spawn(function()
                             end
                             for i = 1, 3 do 
                                 RegisterAttack:FireServer(0.0123)
-                                RegisterHit:FireServer(targets[1][2], targets)
+                                RegisterHit:FireServer(targets[1][2], hitTargets)
                             end
                         end
                     end
@@ -756,9 +759,3 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
-
-
-
-
-
-
