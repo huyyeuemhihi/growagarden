@@ -45,7 +45,8 @@ _G.Settings = {
     AutoStatEnabled = false,
     StatTarget = "Melee",
     AutoEquip = true,
-    Weapon = "Melee"
+    Weapon = "Melee",
+    AutoHaki = true
 }
 local Settings = _G.Settings
 local currentTween
@@ -171,6 +172,16 @@ local function EquipWeapon()
             -- Trang bị vũ khí đúng
             Humanoid:EquipTool(tool)
             break
+        end
+    end
+end
+
+local function ActiveHaki()
+    if not Settings.AutoHaki then return end
+    if not Character:FindFirstChild("HasBuso") then
+        local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
+        if remote then
+            remote:InvokeServer("Buso")
         end
     end
 end
@@ -592,6 +603,7 @@ task.spawn(function()
         -- GỌI HÀM CỦA BẠN TẠI ĐÂY ĐỂ CẬP NHẬT CHARACTER/HRP/HUMANOID
         if CheckPlayerAlive() then 
             UpdateHover()
+            ActiveHaki()
             
             -- Chỉ chạy Attack khi bật farm
             if (Settings.AutoFarm or Settings.FarmNearest) then
