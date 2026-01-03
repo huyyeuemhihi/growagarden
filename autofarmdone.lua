@@ -286,10 +286,10 @@ local function UpdateQuestData()
             PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7836, 5681, -1792)
             CheckTeleport(PosQ.Position, Vector3.new(-7894, 5547, -380))
         elseif a >= 625 and a <= 649 then
-            Mon = "Galley Pirate"; Qname = "FontaineQuest"; Qdata = 1; NameMon = "Galley Pirate"
+            Mon = "Galley Pirate"; Qname = "FountainQuest"; Qdata = 1; NameMon = "Galley Pirate"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5589, 39, 3996)
         elseif a >= 650 and a <= 699 then
-            Mon = "Galley Captain"; Qname = "FontaineQuest"; Qdata = 2; NameMon = "Galley Captain"
+            Mon = "Galley Captain"; Qname = "FountainQuest"; Qdata = 2; NameMon = "Galley Captain"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5649, 39, 4936)
         end
     elseif Sea2 then
@@ -546,7 +546,7 @@ task.spawn(function()
                     HRP.Velocity = Vector3.new(0,0,0)
 
                     -- Logic Bring Mob (Gom quái y hệt farm level)
-                    if Settings.BringMob and (tick() - lastBringTick) >= 0.234 then
+                    if Settings.BringMob and (tick() - lastBringTick) >= 0.2 then
                         lastBringTick = tick()
                         for _, m in pairs(Workspace.Enemies:GetChildren()) do
                             -- Nếu farm Near thì gom mọi quái gần đó, nếu farm Level thì chỉ gom quái cùng tên
@@ -566,7 +566,7 @@ task.spawn(function()
                                     end
                                     -- Đưa về tâm
                                     if m ~= targetMob then
-                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, math.random(-2,2)/2)
+                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, -2)
                                         mhrp.Velocity = Vector3.new(0,0,0)
                                     end
                                     m.Humanoid.WalkSpeed = 0
@@ -601,56 +601,57 @@ task.spawn(function()
     local RegisterHit = Net:WaitForChild("RE/RegisterHit")
 
     while true do
-        task.wait() -- Đảm bảo vòng lặp mượt mà
+        task.wait()
 
-        -- GỌI HÀM CỦA BẠN TẠI ĐÂY ĐỂ CẬP NHẬT CHARACTER/HRP/HUMANOID
         if CheckPlayerAlive() then 
             UpdateHover()
             ActiveHaki()
             
-            -- Chỉ chạy Attack khi bật farm
             if (Settings.AutoFarm or Settings.FarmNearest) then
                 pcall(function()
                     local enemies = Workspace:FindFirstChild("Enemies")
                     if not enemies then return end
                     
                     local targets = {}
+                    
                     for _, m in pairs(enemies:GetChildren()) do
                         if Alive(m) then
                             local mHRP = m:FindFirstChild("HumanoidRootPart")
                             if mHRP then
-                                -- Sử dụng HRP đã được CheckPlayerAlive cập nhật mới nhất
                                 local dist = (mHRP.Position - HRP.Position).Magnitude
                                 
                                 local canHit = false
                                 if Settings.FarmNearest then
-                                    if dist <= (Settings.BringRadius or 250) + 50 then
+                                    if dist <= (Settings.BringRadius or 250) then
                                         canHit = true
                                     end
                                 elseif Settings.AutoFarm then
-                                    if m.Name == NameMon and dist <= (Settings.BringRadius or 250) + 50 then
+                                    if m.Name == NameMon and dist <= (Settings.BringRadius or 250) then
                                         canHit = true
                                     end
                                 end
 
                                 if canHit then
-                                    table.insert(targets, {m, mHRP})
+                                    -- CHỈ THÊM VÀO DANH SÁCH ĐÁNH KHI DƯỚI 60
+                                    if dist <= 60 then
+                                        table.insert(targets, {m, mHRP})
+                                    end
                                 end
                             end
                         end
+                        -- Giới hạn 15 con để tối ưu sát thương
+                        if #targets >= 15 then break end 
                     end
 
                     if #targets > 0 then
                         EquipWeapon()
                         if Character:FindFirstChildOfClass("Tool") then
-                            local hitTargets = {}
-                            for i = 1, math.min(#targets, 6) do
-                                table.insert(hitTargets, targets[i])
-                            end
-                            for i = 1, 3 do 
-                                RegisterAttack:FireServer(0.0123)
-                                RegisterHit:FireServer(targets[1][2], hitTargets)
-                            end
+                            RegisterAttack:FireServer()
+                            RegisterHit:FireServer(targets[1][2], targets)
+                            RegisterHit:FireServer(targets[1][2], targets)
+                            RegisterHit:FireServer(targets[1][2], targets)
+                            RegisterHit:FireServer(targets[1][2], targets)
+                            RegisterHit:FireServer(targets[1][2], targets)
                         end
                     end
                 end)
