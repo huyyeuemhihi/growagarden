@@ -41,7 +41,7 @@ _G.Settings = {
     FarmNearest = false,
     TweenHeight = 24,
     TweenSpeed = 350,
-    BringRadius = 200,
+    BringRadius = 250,
     AutoStatEnabled = false,
     StatTarget = "Melee",
     AutoEquip = true,
@@ -81,9 +81,17 @@ end
 
 -- ===== HELPER FUNCTIONS =====
 local function Alive(m)
+    if not m then return false end
+
     local h = m:FindFirstChild("Humanoid")
-    return h and h.Health > 0 and m:FindFirstChild("HumanoidRootPart")
+    local hrp = m:FindFirstChild("HumanoidRootPart")
+
+    if not h or not hrp then return false end
+    if h.Health <= 0 then return false end
+
+    return true
 end
+
 
 local function ResetMobPhysics()
     local enemies = Workspace:FindFirstChild("Enemies")
@@ -291,6 +299,9 @@ local function UpdateQuestData()
         elseif a >= 650 and a <= 699 then
             Mon = "Galley Captain"; Qname = "FountainQuest"; Qdata = 2; NameMon = "Galley Captain"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5649, 39, 4936)
+        elseif a > 699 then
+            Mon = "Galley Captain"; Qname = "FountainQuest"; Qdata = 2; NameMon = "Galley Captain"
+            PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5649, 39, 4936)
         end
     elseif Sea2 then
         if a >= 700 and a <= 724 then
@@ -342,11 +353,14 @@ local function UpdateQuestData()
             Mon = "Ship Engineer"; Qname = "ShipQuest1"; Qdata = 2; NameMon = "Ship Engineer"
             PosQ = CFrame.new(1038, 125, 32911); PosM = CFrame.new(917, 125, 32740)
         elseif a >= 1425 and a <= 1449 then
-            Mon = "Ship Steward"; Qname = "ShipQuest2"; Qdata = 1; NameMon = "Ship Steward"
-            PosQ = CFrame.new(969, 125, 33245); PosM = CFrame.new(915, 130, 33419)
+            Mon = "Water Fighter"; Qname = "ForgottenQuest"; Qdata = 1; NameMon = "Water Fighter"
+            PosQ = CFrame.new(-3051, 239, -10141); PosM = CFrame.new(915, 130, 33419)
         elseif a >= 1450 and a <= 1474 then
-            Mon = "Ship Officer"; Qname = "ShipQuest2"; Qdata = 2; NameMon = "Ship Officer"
-            PosQ = CFrame.new(969, 125, 33245); PosM = CFrame.new(685, 130, 33230)
+            Mon = "Tide Keeper"; Qname = "ForgottenQuest"; Qdata = 3; NameMon = "Tide Keeper"
+            PosQ = CFrame.new(-3051, 239, -10141); PosM = CFrame.new(-3266, 298, -10551)
+        elseif a > 1474 then
+            Mon = "Tide Keeper"; Qname = "ForgottenQuest"; Qdata = 3; NameMon = "Tide Keeper"
+            PosQ = CFrame.new(-3051, 239, -10141); PosM = CFrame.new(-3266, 298, -10551)
         end
     elseif Sea3 then
         if a >= 1500 and a <= 1524 then
@@ -546,7 +560,7 @@ task.spawn(function()
                     HRP.Velocity = Vector3.new(0,0,0)
 
                     -- Logic Bring Mob (Gom quái y hệt farm level)
-                    if Settings.BringMob and (tick() - lastBringTick) >= 0.2 then
+                    if Settings.BringMob and (tick() - lastBringTick) >= 0.1 then
                         lastBringTick = tick()
                         for _, m in pairs(Workspace.Enemies:GetChildren()) do
                             -- Nếu farm Near thì gom mọi quái gần đó, nếu farm Level thì chỉ gom quái cùng tên
@@ -560,13 +574,8 @@ task.spawn(function()
                             if canBring then
                                 local mhrp = m.HumanoidRootPart
                                 if (mhrp.Position - targetHRP.Position).Magnitude <= Settings.BringRadius then
-                                    -- Noclip quái
-                                    for _, p in pairs(m:GetDescendants()) do
-                                        if p:IsA("BasePart") then p.CanCollide = false end
-                                    end
-                                    -- Đưa về tâm
                                     if m ~= targetMob then
-                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, -2)
+                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 1, 0)
                                         mhrp.Velocity = Vector3.new(0,0,0)
                                     end
                                     m.Humanoid.WalkSpeed = 0
@@ -632,7 +641,7 @@ task.spawn(function()
 
                                 if canHit then
                                     -- CHỈ THÊM VÀO DANH SÁCH ĐÁNH KHI DƯỚI 60
-                                    if dist <= 60 then
+                                    if dist <= 61 then
                                         table.insert(targets, {m, mHRP})
                                     end
                                 end
@@ -718,7 +727,7 @@ Setting:CreateSlider({
     Name = "Bring Distance",
     Range = {150, 400},
     Increment = 10,
-    CurrentValue = 200,
+    CurrentValue = 250,
     Callback = function(v) Settings.BringRadius = v end
 })
 
@@ -759,6 +768,3 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
-
-
-
