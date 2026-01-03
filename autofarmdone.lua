@@ -651,7 +651,6 @@ task.spawn(function()
                             RegisterHit:FireServer(targets[1][2], targets)
                             RegisterHit:FireServer(targets[1][2], targets)
                             RegisterHit:FireServer(targets[1][2], targets)
-                            RegisterHit:FireServer(targets[1][2], targets)
                         end
                     end
                 end)
@@ -760,3 +759,4 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
+
