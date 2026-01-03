@@ -457,7 +457,7 @@ task.spawn(function()
     local isWaitingQuest = false
 
     while true do
-        task.wait()
+        task.wait(0.016)
         if not Character or not Character.Parent or not HRP or not Humanoid or Humanoid.Health <= 0 then
             Character = Player.Character
             if Character then
@@ -600,8 +600,7 @@ task.spawn(function()
     local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
     local RegisterHit = Net:WaitForChild("RE/RegisterHit")
 
-    while true do
-        task.wait()
+    RunService.Heartbeat:Connect(function()
 
         if CheckPlayerAlive() then 
             UpdateHover()
@@ -651,12 +650,13 @@ task.spawn(function()
                             RegisterHit:FireServer(targets[1][2], targets)
                             RegisterHit:FireServer(targets[1][2], targets)
                             RegisterHit:FireServer(targets[1][2], targets)
+                            RegisterHit:FireServer(targets[1][2], targets)
                         end
                     end
                 end)
             end
         end
-    end
+    end)
 end)
 
 task.spawn(function()
@@ -759,5 +759,6 @@ StatsTab:CreateToggle({
    end,
 })
 Rayfield:LoadConfiguration()
+
 
 
