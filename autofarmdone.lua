@@ -27,19 +27,26 @@ local Humanoid = Character:WaitForChild("Humanoid")
 
 -- Biến hỗ trợ logic
 local Mon, Qname, Qdata, NameMon, PosM, PosQ
-local isWaitingQuest = false
+local lastBringTick = 0
+local BypassDist = 250
+local LockedMobs = {}
+
+-- Cache remotes / modules
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local NetModule = nil
+pcall(function() NetModule = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net") end)
 
 Player.Idled:Connect(function()
     VirtualUser:CaptureController()
     VirtualUser:ClickButton2(Vector2.new())
 end)
 
--- ===== SETTINGS & VARIABLES =====
+-- ===== SETTINGS =====
 _G.Settings = {
     AutoFarm = false,
     BringMob = true,
     FarmNearest = false,
-    TweenHeight = 24,
+    TweenHeight = 23,
     TweenSpeed = 350,
     BringRadius = 250,
     AutoStatEnabled = false,
@@ -49,10 +56,8 @@ _G.Settings = {
     AutoHaki = true
 }
 local Settings = _G.Settings
-local currentTween
-local lastBringTick = 0
+local currentTween = nil
 local NPC_Sub_Pos = CFrame.new(-16269.4, 23.9, 1371.6)
-
 
 local Sea1 = false
 local Sea2 = false
@@ -60,24 +65,24 @@ local Sea3 = false
 local v6 = game.PlaceId
 if v6 == 2753915549 then
     Sea1 = true
-elseif v6 == 4442272183 or v6 == 79091703265657 then -- Thêm v6 == ở đây
+elseif v6 == 4442272183 or v6 == 79091703265657 then
     Sea2 = true
-elseif v6 == 7449423635 or v6 == 100117331123089 then -- Thêm v6 == ở đây
+elseif v6 == 7449423635 or v6 == 100117331123089 then
     Sea3 = true
 end
 
+-- ===== TWEEN =====
 local function Tween(targetCFrame)
     if not HRP or not targetCFrame then return end
     local dist = (HRP.Position - targetCFrame.p).Magnitude
     
     if currentTween then currentTween:Cancel() end
     
-    local tweenTime = dist / _G.Settings.TweenSpeed
+    local tweenTime = math.max(0.01, dist / (Settings.TweenSpeed or 350))
     currentTween = TweenService:Create(HRP, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
     currentTween:Play()
     return currentTween
 end
-
 
 -- ===== HELPER FUNCTIONS =====
 local function Alive(m)
@@ -92,16 +97,198 @@ local function Alive(m)
     return true
 end
 
+-- ===== ĐẾM SỐ MOBS TRONG VÙNG =====
+local function CountMobsInRange(targetPos, nameFilter)
+    local count = 0
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return 0 end
+    
+    for _, mob in pairs(enemies:GetChildren()) do
+        if Alive(mob) and (not nameFilter or mob.Name == nameFilter) then
+            local mhrp = mob:FindFirstChild("HumanoidRootPart")
+            if mhrp then
+                local distance = (mhrp.Position - targetPos).Magnitude
+                if distance <= Settings.BringRadius then
+                    count = count + 1
+                end
+            end
+        end
+    end
+    return count
+end
+
+-- ===== SIMPLE TELEPORT & LOCK SYSTEM =====
+local function TeleportMob(mob, targetPos, targetLookVector, lockEnabled)
+    if not mob or not Alive(mob) then return end
+    
+    pcall(function()
+        local hrp = mob:FindFirstChild("HumanoidRootPart")
+        local humanoid = mob:FindFirstChild("Humanoid")
+        if not hrp then return end
+        
+        -- TELEPORT thẳng đến vị trí (random offset nhỏ)
+        local teleportPos = Vector3.new(
+            targetPos.X, 
+            targetPos.Y - 0.2,
+            targetPos.Z + math.random(-1, 1)/6
+        )
+        -- Quay mob theo cùng hướng với target (LookVector)
+        if targetLookVector then
+            hrp.CFrame = CFrame.new(teleportPos, teleportPos + targetLookVector)
+        else
+            hrp.CFrame = CFrame.new(teleportPos)
+        end
+        
+        -- Nếu chỉ có 1 mob (lockEnabled = false), không lock, chỉ teleport
+        if lockEnabled then
+            -- Reset velocity hoàn toàn
+            hrp.Velocity = Vector3.new(0, 0, 0)
+            hrp.RotVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            
+            -- Tạo BodyGyro để LOCK HƯỚNG (theo targetLookVector)
+            if targetLookVector then
+                local bg = Instance.new("BodyGyro")
+                bg.Name = "MobLockBG"
+                bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+                bg.P = 10000
+                bg.D = 500
+                bg.CFrame = CFrame.new(hrp.Position, hrp.Position + targetLookVector)
+                bg.Parent = hrp
+            end
+            
+            -- Tạo BodyVelocity để LOCK VỊ TRÍ
+            local bv = Instance.new("BodyVelocity")
+            bv.Name = "MobLockBV"
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bv.Velocity = Vector3.new(0, 0, 0)
+            bv.Parent = hrp
+            
+            -- Mob đứng yên hoàn toàn
+            if humanoid then
+                humanoid.WalkSpeed = 0
+                humanoid.JumpPower = 0
+            end
+            
+            LockedMobs[mob] = true
+        else
+            -- Nếu không lock, chỉ teleport và để mob tự do
+            if humanoid then
+                humanoid.WalkSpeed = 16
+                humanoid.JumpPower = 50
+            end
+            
+            -- Dọn dẹp lock nếu có
+            local bv = hrp:FindFirstChild("MobLockBV")
+            local bg = hrp:FindFirstChild("MobLockBG")
+            if bv then bv:Destroy() end
+            if bg then bg:Destroy() end
+            
+            LockedMobs[mob] = nil
+        end
+    end)
+end
+
+local function UnlockMob(mob)
+    if not mob then return end
+    
+    pcall(function()
+        local hrp = mob:FindFirstChild("HumanoidRootPart")
+        local humanoid = mob:FindFirstChild("Humanoid")
+        
+        if hrp then
+            local bv = hrp:FindFirstChild("MobLockBV")
+            local bg = hrp:FindFirstChild("MobLockBG")
+            if bv then bv:Destroy() end
+            if bg then bg:Destroy() end
+        end
+        
+        if humanoid then
+            humanoid.WalkSpeed = 16
+            humanoid.JumpPower = 50
+        end
+        
+        LockedMobs[mob] = nil
+    end)
+end
+
+local function CleanUpLockedMobs()
+    for mob, _ in pairs(LockedMobs) do
+        if not mob or not mob.Parent or not Alive(mob) then
+            UnlockMob(mob)
+        end
+    end
+end
+
+local function SimpleTeleportMobs(targetHRP)
+    if not Settings.BringMob or not targetHRP then return end
+    if tick() - lastBringTick < 0.17 then return end
+    
+    lastBringTick = tick()
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    
+    local targetPos = targetHRP.Position
+    local targetLookVector = targetHRP.CFrame.LookVector
+    local nameFilter = Settings.AutoFarm and NameMon or nil
+    
+    -- Đếm số mob trong vùng
+    local mobCount = CountMobsInRange(targetPos, nameFilter)
+    
+    -- Nếu chỉ có 1 mob, không lock (lockEnabled = false)
+    local lockEnabled = mobCount > 1
+    
+    for _, mob in pairs(enemies:GetChildren()) do
+        local canTeleport = false
+        if Settings.FarmNearest then
+            canTeleport = Alive(mob)
+        else
+            canTeleport = Alive(mob) and (not nameFilter or mob.Name == nameFilter)
+        end
+        
+        if canTeleport then
+            local mhrp = mob:FindFirstChild("HumanoidRootPart")
+            if mhrp then
+                local distance = (mhrp.Position - targetPos).Magnitude
+                
+                -- Nếu mob trong phạm vi bring
+                if distance <= Settings.BringRadius then
+                    TeleportMob(mob, targetPos, targetLookVector, lockEnabled)
+                elseif LockedMobs[mob] then
+                    -- Nếu mob ra khỏi phạm vi, unlock nó
+                    UnlockMob(mob)
+                end
+            end
+        end
+    end
+    
+    -- Dọn dẹp mob đã chết
+    CleanUpLockedMobs()
+end
 
 local function ResetMobPhysics()
+    for mob, _ in pairs(LockedMobs) do
+        UnlockMob(mob)
+    end
+    LockedMobs = {}
+    
     local enemies = Workspace:FindFirstChild("Enemies")
     if enemies then
-        for _, m in pairs(enemies:GetChildren()) do
-            for _, p in pairs(m:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = true end
-            end
-            if m:FindFirstChild("HumanoidRootPart") then m.HumanoidRootPart.Anchored = false end
-            if m:FindFirstChild("Humanoid") then m.Humanoid.WalkSpeed = 16 end
+        for _, mob in pairs(enemies:GetChildren()) do
+            pcall(function()
+                local hrp = mob:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local bv = hrp:FindFirstChild("MobLockBV")
+                    local bg = hrp:FindFirstChild("MobLockBG")
+                    if bv then bv:Destroy() end
+                    if bg then bg:Destroy() end
+                end
+                
+                if mob:FindFirstChild("Humanoid") then 
+                    mob.Humanoid.WalkSpeed = 16 
+                    mob.Humanoid.JumpPower = 50
+                end
+            end)
         end
     end
 end
@@ -109,25 +296,25 @@ end
 local function CheckPlayerAlive()
     if not Character or not Character.Parent or not Humanoid or Humanoid.Health <= 0 then
         Character = Player.Character or Player.CharacterAdded:Wait()
-        HRP = Character:WaitForChild("HumanoidRootPart")
-        Humanoid = Character:WaitForChild("Humanoid")
-        return false -- Vừa hồi sinh, đợi vòng lặp sau farm tiếp
+        HRP = Character and Character:FindFirstChild("HumanoidRootPart") or nil
+        Humanoid = Character and Character:FindFirstChild("Humanoid") or nil
+        return false
     end
     return true
 end
 
+-- ===== HOVER =====
 local function UpdateHover()
     if not HRP then return end 
     local bv = HRP:FindFirstChild("FarmHover")
 
     if Settings.FarmNearest or Settings.AutoFarm then
-        HRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        
+        HRP.AssemblyLinearVelocity = Vector3.zero
+
         if not bv then
             bv = Instance.new("BodyVelocity")
             bv.Name = "FarmHover"
-            -- Khóa cả 3 trục để không bị trôi
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge) 
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             bv.Velocity = Vector3.new(0, 0, 0)
             bv.Parent = HRP
         else
@@ -138,8 +325,10 @@ local function UpdateHover()
     end
 end
 
+-- ===== NO CLIP =====
 local function ToggleNoclip(state)
     if state then
+        if _G.NoclipConn then return end
         _G.NoclipConn = RunService.Stepped:Connect(function()
             if Character then
                 for _, v in pairs(Character:GetDescendants()) do
@@ -152,16 +341,15 @@ local function ToggleNoclip(state)
     end
 end
 
-
 local function AddStat(name, amount)
-    local remote = game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_")
+    amount = amount or 1
+    local remote = Remotes and Remotes:FindFirstChild("CommF_")
     if remote then
         pcall(function()
-            remote:InvokeServer("AddPoint", name, 5)
+            remote:InvokeServer("AddPoint", name, amount)
         end)
     end
 end
-
 
 local function EquipWeapon()
     if not Settings.AutoEquip then return end
@@ -190,9 +378,11 @@ end
 local function ActiveHaki()
     if not Settings.AutoHaki then return end
     if not Character:FindFirstChild("HasBuso") then
-        local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
+        local remote = Remotes and Remotes:FindFirstChild("CommF_")
         if remote then
-            remote:InvokeServer("Buso")
+            pcall(function()
+                remote:InvokeServer("Buso")
+            end)
         end
     end
 end
@@ -201,18 +391,21 @@ end
 local function UpdateQuestData()
     local a = Player.Data.Level.Value
     
-    -- Reset các biến teleport nếu cần
     local function CheckTeleport(targetPos, entrancePos)
         local dist = (targetPos - HRP.Position).Magnitude
         if Settings.AutoFarm and dist > 10000 then
-            ReplicatedStorage.Remotes.CommF_:InvokeServer("requestEntrance", entrancePos)
+            if Remotes and Remotes:FindFirstChild("CommF_") then
+                pcall(function()
+                    Remotes.CommF_:InvokeServer("requestEntrance", entrancePos)
+                end)
+            end
             task.wait(1)
         end
     end
 
     if Sea1 then
         if a >= 1 and a <= 9 then
-            if tostring(Player.Team) == "Marines" then
+            if Player.Team and Player.Team.Name == "Marines" then
                 Mon = "Trainee"; Qname = "MarineQuest"; Qdata = 1; NameMon = "Trainee"
                 PosQ = CFrame.new(-2709, 25, 2104); PosM = PosQ
             else
@@ -290,17 +483,17 @@ local function UpdateQuestData()
             Mon = "Royal Squad"; Qdata = 1; Qname = "SkyExp2Quest"; NameMon = "Royal Squad"
             PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7635, 5637, -1408)
         elseif a >= 550 and a <= 624 then
-            Mon = "Royal Soldier"; Qname = "SkyExp2Quest"; Qdata = 2; NameMon = "Royal Soldier"
+            Mon = "Royal Soldier"; Qdata = 2; Qname = "SkyExp2Quest"; NameMon = "Royal Soldier"
             PosQ = CFrame.new(-7906, 5634, -1411); PosM = CFrame.new(-7836, 5681, -1792)
             CheckTeleport(PosQ.Position, Vector3.new(-7894, 5547, -380))
         elseif a >= 625 and a <= 649 then
-            Mon = "Galley Pirate"; Qname = "FountainQuest"; Qdata = 1; NameMon = "Galley Pirate"
+            Mon = "Galley Pirate"; Qdata = 1; Qname = "FountainQuest"; NameMon = "Galley Pirate"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5589, 39, 3996)
         elseif a >= 650 and a <= 699 then
-            Mon = "Galley Captain"; Qname = "FountainQuest"; Qdata = 2; NameMon = "Galley Captain"
+            Mon = "Galley Captain"; Qdata = 2; Qname = "FountainQuest"; NameMon = "Galley Captain"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5649, 39, 4936)
         elseif a > 699 then
-            Mon = "Galley Captain"; Qname = "FountainQuest"; Qdata = 2; NameMon = "Galley Captain"
+            Mon = "Galley Captain"; Qdata = 2; Qname = "FountainQuest"; NameMon = "Galley Captain"
             PosQ = CFrame.new(5256, 38, 4050); PosM = CFrame.new(5649, 39, 4936)
         end
     elseif Sea2 then
@@ -430,7 +623,7 @@ local function UpdateQuestData()
             Mon = "Island Boy"; Qname = "TikiQuest1"; Qdata = 2; NameMon = "Island Boy"
             PosQ = CFrame.new(-16548, 55, -172); PosM = CFrame.new(-16849, 192, -150)
         elseif a >= 2500 and a <= 2524 then
-            Mon = "Sun-kissed Warrior"; Qname = "TikiQuest2"; Qdata = 1; NameMon = "Sun-kissed Warrior" -- Sửa lỗi thiếu chữ "Sun-"
+            Mon = "Sun-kissed Warrior"; Qname = "TikiQuest2"; Qdata = 1; NameMon = "Sun-kissed Warrior"
             PosQ = CFrame.new(-16538, 55, 1049); PosM = CFrame.new(-16347, 64, 984)
         elseif a >= 2525 and a <= 2550 then
             Mon = "Isle Champion"; Qname = "TikiQuest2"; Qdata = 2; NameMon = "Isle Champion"
@@ -457,49 +650,41 @@ local function UpdateQuestData()
             Mon = "High Disciple"; Qname = "SubmergedQuest3"; Qdata = 1; NameMon = "High Disciple"
             PosQ = CFrame.new(9638, -1993, 9615); PosM = CFrame.new(9818.4014, -1962.3967, 9810.8350)
         elseif a >= 2725 then
-            Mon = "Grand Devotee";  Qname = "SubmergedQuest3"; Qdata = 2; NameMon = "Grand Devotee"
+            Mon = "Grand Devotee"; Qname = "SubmergedQuest3"; Qdata = 2; NameMon = "Grand Devotee"
             PosQ = CFrame.new(9638, -1993, 9615); PosM = CFrame.new(9585.79, -1912.35, 9822.90)
         end
     end
 end
 
-
 -- ===== MAIN FARM LOOP =====
 task.spawn(function()
-    local lastBringTick = 0
-    local BypassDist = 250
-    local isWaitingQuest = false
-
     while true do
-        task.wait(0.016)
-        if not Character or not Character.Parent or not HRP or not Humanoid or Humanoid.Health <= 0 then
-            Character = Player.Character
-            if Character then
-                HRP = Character:FindFirstChild("HumanoidRootPart")
-                Humanoid = Character:FindFirstChild("Humanoid")
-            end
+        task.wait(0.02)
+        if not CheckPlayerAlive() then
             if currentTween then currentTween:Cancel() end
-            continue -- Nhảy qua vòng lặp này để đợi nhân vật sẵn sàng
+            continue
         end
         
         if (Settings.AutoFarm or Settings.FarmNearest) and HRP and Humanoid.Health > 0 then
-            
-            -- Biến dùng chung cho cả 2 chế độ
             local targetMob = nil
             
             if Settings.FarmNearest then
-                -- Tìm quái gần nhất không phân biệt tên
                 local dist = math.huge
-                for _, m in pairs(Workspace.Enemies:GetChildren()) do
-                    if Alive(m) then
-                        local d = (m.HumanoidRootPart.Position - HRP.Position).Magnitude
-                        if d < dist then dist = d; targetMob = m end
+                local enemies = Workspace:FindFirstChild("Enemies")
+                if enemies then
+                    for _, m in pairs(enemies:GetChildren()) do
+                        if Alive(m) then
+                            local mhrp = m:FindFirstChild("HumanoidRootPart")
+                            if mhrp then
+                                local d = (mhrp.Position - HRP.Position).Magnitude
+                                if d < dist then dist = d; targetMob = m end
+                            end
+                        end
                     end
                 end
             elseif Settings.AutoFarm then
                 UpdateQuestData()
                 
-                -- Logic Travel (Dành riêng cho Farm Level)
                 if Player.Data.Level.Value >= 2675 and HRP.Position.Y > -500 then
                     local distToSub = (HRP.Position - NPC_Sub_Pos.p).Magnitude
                     if distToSub > 20 then
@@ -512,7 +697,6 @@ task.spawn(function()
                     continue
                 end
 
-                -- Logic Nhận Quest
                 if not Player.PlayerGui.Main.Quest.Visible then
                     local distQ = (HRP.Position - PosQ.Position).Magnitude
                     if distQ > 12 then
@@ -520,173 +704,138 @@ task.spawn(function()
                     else
                         if currentTween then currentTween:Cancel() end
                         HRP.CFrame = PosQ
-                        if not isWaitingQuest then
-                            isWaitingQuest = true
-                            task.wait(1)
-                            if not Player.PlayerGui.Main.Quest.Visible then
-                                ReplicatedStorage.Remotes.CommF_:InvokeServer("StartQuest", Qname, Qdata)
+                        task.wait(0.5)
+                        if not Player.PlayerGui.Main.Quest.Visible then
+                            if Remotes and Remotes:FindFirstChild("CommF_") then
+                                pcall(function() Remotes.CommF_:InvokeServer("StartQuest", Qname, Qdata) end)
                             end
-                            isWaitingQuest = false
                         end
                     end
                 else
-                    -- Tìm đúng quái nhiệm vụ
-                    for _, m in pairs(Workspace.Enemies:GetChildren()) do
-                        if Alive(m) and m.Name == NameMon then
-                            targetMob = m
-                            break
+                    local enemies = Workspace:FindFirstChild("Enemies")
+                    if enemies then
+                        for _, m in pairs(enemies:GetChildren()) do
+                            if Alive(m) and m.Name == NameMon then
+                                targetMob = m
+                                break
+                            end
                         end
                     end
                 end
             end
 
-            -- ==========================================
-            -- LOGIC DI CHUYỂN VÀ BRING MOB (Y HỆT NHAU)
-            -- ==========================================
             if targetMob then
-                local targetHRP = targetMob.HumanoidRootPart
-                -- Tọa độ đứng farm lệch để né đòn (Y hệt farm level)
+                local targetHRP = targetMob:FindFirstChild("HumanoidRootPart")
+                if not targetHRP then continue end
+                
+                -- TWEEN LOGIC
                 local targetPos = targetHRP.Position + Vector3.new(-4, Settings.TweenHeight, 5)
                 local targetCFrame = CFrame.new(targetPos, targetPos + targetHRP.CFrame.LookVector)
 
                 if (HRP.Position - targetPos).Magnitude > BypassDist then 
                     if currentTween then currentTween:Cancel() end 
-                    local tweenTime = (HRP.Position - targetPos).Magnitude / Settings.TweenSpeed 
-                    currentTween = TweenService:Create(HRP, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {CFrame = targetCFrame}) 
-                    currentTween:Play() 
+                    currentTween = Tween(targetCFrame)
                 else 
                     if currentTween then currentTween:Cancel() end 
                     HRP.CFrame = targetCFrame 
                     HRP.Velocity = Vector3.new(0,0,0)
 
-                    -- Logic Bring Mob (Gom quái y hệt farm level)
-                    if Settings.BringMob and (tick() - lastBringTick) >= 0.1 then
-                        lastBringTick = tick()
-                        for _, m in pairs(Workspace.Enemies:GetChildren()) do
-                            -- Nếu farm Near thì gom mọi quái gần đó, nếu farm Level thì chỉ gom quái cùng tên
-                            local canBring = false
-                            if Settings.FarmNearest then
-                                canBring = Alive(m)
-                            else
-                                canBring = Alive(m) and m.Name == NameMon
-                            end
-
-                            if canBring then
-                                local mhrp = m.HumanoidRootPart
-                                if (mhrp.Position - targetHRP.Position).Magnitude <= Settings.BringRadius then
-                                    if m ~= targetMob then
-                                        mhrp.CFrame = targetHRP.CFrame * CFrame.new(0, 1, 0)
-                                        mhrp.Velocity = Vector3.new(0,0,0)
-                                    end
-                                    m.Humanoid.WalkSpeed = 0
-                                end
-                            end
-                        end
+                    -- TELEPORT MOBS STRAIGHT
+                    if Settings.BringMob then
+                        SimpleTeleportMobs(targetHRP)
                     end
                 end
             else
                 if Settings.FarmNearest then
                     if currentTween then currentTween:Cancel() end
+                    if HRP then
+                        HRP.Velocity = Vector3.new(0, 0, 0)
+                        HRP.RotVelocity = Vector3.new(0, 0, 0)
+                    end
                     UpdateHover()
                 end
     
-                -- Nếu hết quái (Chỉ dành cho Farm Level để về bãi chờ)
                 if Settings.AutoFarm and Player.PlayerGui.Main.Quest.Visible then
                     if currentTween then currentTween:Cancel() end
                     local distToM = (HRP.Position - PosM.p).Magnitude
-                    currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 20, 0)})
-                    currentTween:Play()
+                    if distToM > 10 then
+                        currentTween = TweenService:Create(HRP, TweenInfo.new(distToM/Settings.TweenSpeed, Enum.EasingStyle.Linear), {CFrame = PosM * CFrame.new(0, 20, 0)})
+                        currentTween:Play()
+                    end
                 end
             end
+        else
+            UpdateHover()
         end
     end
 end)
 
-
--- ===== EXTREME ATTACK SYSTEM (FIXED) =====
+-- ===== ATTACK SYSTEM =====
 task.spawn(function()
-    local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
-    local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
-    local RegisterHit = Net:WaitForChild("RE/RegisterHit")
+    local Net = NetModule
+    local RegisterAttack = Net and Net:FindFirstChild("RE/RegisterAttack")
+    local RegisterHit = Net and Net:FindFirstChild("RE/RegisterHit")
 
     RunService.Heartbeat:Connect(function()
-
-        if CheckPlayerAlive() then 
-            UpdateHover()
-            ActiveHaki()
-            
-            if (Settings.AutoFarm or Settings.FarmNearest) then
-                pcall(function()
-                    local enemies = Workspace:FindFirstChild("Enemies")
-                    if not enemies then return end
-                    
-                    local targets = {}
-                    
-                    for _, m in pairs(enemies:GetChildren()) do
-                        if Alive(m) then
-                            local mHRP = m:FindFirstChild("HumanoidRootPart")
-                            if mHRP then
-                                local dist = (mHRP.Position - HRP.Position).Magnitude
-                                
-                                local canHit = false
-                                if Settings.FarmNearest then
-                                    if dist <= (Settings.BringRadius or 250) then
-                                        canHit = true
-                                    end
-                                elseif Settings.AutoFarm then
-                                    if m.Name == NameMon and dist <= (Settings.BringRadius or 250) then
-                                        canHit = true
-                                    end
+        if not CheckPlayerAlive() then return end
+        UpdateHover()
+        ActiveHaki()
+        
+        if (Settings.AutoFarm or Settings.FarmNearest) then
+            pcall(function()
+                local enemies = Workspace:FindFirstChild("Enemies")
+                if not enemies then return end
+                
+                local targets = {}
+                
+                for _, m in pairs(enemies:GetChildren()) do
+                    if Alive(m) then
+                        local mHRP = m:FindFirstChild("HumanoidRootPart")
+                        if mHRP then
+                            local dist = (mHRP.Position - HRP.Position).Magnitude
+                            
+                            local canHit = false
+                            if Settings.FarmNearest then
+                                if dist <= (Settings.BringRadius or 250) then
+                                    canHit = true
                                 end
-
-                                if canHit then
-                                    -- CHỈ THÊM VÀO DANH SÁCH ĐÁNH KHI DƯỚI 60
-                                    if dist <= 61 then
-                                        table.insert(targets, {m, mHRP})
-                                    end
+                            elseif Settings.AutoFarm then
+                                if m.Name == NameMon and dist <= (Settings.BringRadius or 250) then
+                                    canHit = true
                                 end
                             end
-                        end
-                        -- Giới hạn 15 con để tối ưu sát thương
-                        if #targets >= 15 then break end 
-                    end
 
-                    if #targets > 0 then
-                        EquipWeapon()
-                        if Character:FindFirstChildOfClass("Tool") then
-                            RegisterAttack:FireServer()
-                            RegisterHit:FireServer(targets[1][2], targets)
-                            RegisterHit:FireServer(targets[1][2], targets)
-                            RegisterHit:FireServer(targets[1][2], targets)
-                            RegisterHit:FireServer(targets[1][2], targets)
-                            RegisterHit:FireServer(targets[1][2], targets)
+                            if canHit and dist <= 60 then
+                                table.insert(targets, {m, mHRP})
+                            end
                         end
                     end
-                end)
-            end
-        end
-    end)
-end)
-
-task.spawn(function()
-    game:GetService("RunService").Stepped:Connect(function()
-        if (Settings.AutoFarm or Settings.FarmNearest) and Character then
-            for _, v in pairs(Character:GetDescendants()) do
-                if v:IsA("BasePart") then
-                    v.CanCollide = false
+                    if #targets >= 15 then break end 
                 end
-            end
+
+                if #targets > 0 and RegisterAttack and RegisterHit then
+                    EquipWeapon()
+                    local tool = Character:FindFirstChildOfClass("Tool")
+                    if tool then
+                        RegisterAttack:FireServer()
+                        local hitCount = 7
+                        for i = 1, hitCount do
+                            RegisterHit:FireServer(targets[1][2], targets)
+                        end
+                    end
+                end
+            end)
         end
     end)
 end)
 
--- ===== UI ELEMENTS =====
+-- ===== UI =====
 Tab:CreateDropdown({
    Name = "Select Weapon",
    Options = {"Melee", "Sword", "Demon Fruit"},
-   CurrentOption = {"Melee"},
+   CurrentOption = "Melee",
    Callback = function(Option)
-      Settings.Weapon = Option[1]
+      Settings.Weapon = Option
    end,
 })
 
@@ -699,9 +848,8 @@ Tab:CreateToggle({
         ToggleNoclip(v)
         if not v then
             if currentTween then currentTween:Cancel() end
-            HRP.Velocity = Vector3.new(0,0,0)
+            if HRP then HRP.Velocity = Vector3.new(0,0,0) end
             ResetMobPhysics()
-            isWaitingQuest = false
         end
     end
 })
@@ -711,7 +859,9 @@ Setting:CreateToggle({
     CurrentValue = true,
     Callback = function(v)
         Settings.BringMob = v
-        if not v then ResetMobPhysics() end
+        if not v then 
+            ResetMobPhysics()
+        end
     end
 })
 
@@ -735,18 +885,22 @@ Tab:CreateToggle({
     Name = "Auto Farm Nearest",
     CurrentValue = false,
     Callback = function(v) 
-        _G.Settings.FarmNearest = v 
-        if not v then if currentTween then currentTween:Cancel() end end
+        Settings.FarmNearest = v 
+        UpdateHover()
+        ToggleNoclip(v)
+        if not v then 
+            if currentTween then currentTween:Cancel() end 
+            ResetMobPhysics()
+        end
     end
 })
 
 StatsTab:CreateDropdown({
    Name = "Select Stat Type",
    Options = {"Melee", "Defense", "Sword", "Gun", "Demon Fruit"},
-   CurrentOption = {"Melee"},
-   MultipleOptions = false,
+   CurrentOption = "Melee",
    Callback = function(Option)
-      Settings.StatTarget = Option[1]
+      Settings.StatTarget = Option
    end,
 })
 
@@ -767,4 +921,30 @@ StatsTab:CreateToggle({
        end
    end,
 })
+
+Setting:CreateDropdown({
+   Name = "Select Weapon",
+   Options = {"Melee", "Sword", "Demon Fruit"},
+   CurrentOption = {"Melee"},
+   Callback = function(Option)
+      Settings.Weapon = Option[1]
+   end,
+})
+
+Setting:CreateToggle({
+    Name = "Auto Haki",
+    CurrentValue = true,
+    Callback = function(v)
+        Settings.AutoHaki = v
+    end
+})
+
+Setting:CreateSlider({
+    Name = "Tween Height",
+    Range = {10, 50},
+    Increment = 1,
+    CurrentValue = 23,
+    Callback = function(v) Settings.TweenHeight = v end
+})
+
 Rayfield:LoadConfiguration()
