@@ -33,14 +33,15 @@ local T1UIColor = {
 	["Page Selected Color"] = Color3.fromRGB(235, 235, 235),
 	["Section Text Color"] = Color3.fromRGB(220, 220, 210),
 	["Section Underline Color"] = Color3.fromRGB(235, 235, 235),
-	["Toggle Border Color"] = Color3.fromRGB(255, 255, 255),
-	["Toggle Checked Color"] = Color3.fromRGB(255, 255, 255),
+	["Toggle Border Color"] = Color3.fromRGB(235, 235, 235),
+	["Toggle Checked Color"] = Color3.fromRGB(230, 230, 230),
 	["Toggle Desc Color"] = Color3.fromRGB(185, 185, 185),
 	["Button Color"] = Color3.fromRGB(235, 235, 235),
 	["Label Color"] = Color3.fromRGB(38, 38, 42),
 	["Dropdown Icon Color"] = Color3.fromRGB(230, 230, 230),
 	["Dropdown Selected Color"] = Color3.fromRGB(235, 235, 235),
 	["Dropdown Selected Check Color"] = Color3.fromRGB(200, 200, 200),
+	["Dropdown Hover Color"] = Color3.fromRGB(255, 255, 255),
 	["Textbox Highlight Color"] = Color3.fromRGB(235, 235, 235),
 	["Box Highlight Color"] = Color3.fromRGB(235, 235, 235),
 	["Slider Line Color"] = Color3.fromRGB(235, 235, 235),
@@ -209,13 +210,12 @@ btnHideFrame.AnchorPoint = Vector2.new(0, 1)
 btnHideFrame.Size = UDim2.new(0, 50, 0, 50)
 btnHideFrame.Position = UDim2.new(0, 0, 1, 0)
 btnHideFrame.Name = "dut dit"
+btnHideFrame:SetAttribute("NoTheme", true) -- nút ẩn/hiện UI (logo) giữ nguyên màu
 btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 btnHideFrame.BackgroundTransparency = getgenv().UIToggled and 0 or .25
-btnHideFrame.Name = "dut dit"
 
 local imgHide = Instance.new('ImageLabel', btnHide)
-imgHide.Name = "imgHide"
-imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
+imgHide:SetAttribute("NoTheme", true)
 imgHide.AnchorPoint = Vector2.new(0, 0)
 imgHide.Image = getgenv().UIColor["Logo Image"]
 imgHide.BackgroundTransparency = 1
@@ -469,27 +469,15 @@ local function themed(d, role, toName)
 	return transform(Themes[toName], d, role)
 end
 
--- Lưu màu gốc theo từng instance/property để chuyển theme A -> B -> A
--- không phải suy ngược từ màu đã bị biến đổi (dễ sai khi nhiều màu trùng nhau).
-local ThemeBaseColors = setmetatable({}, { __mode = "k" })
 local function setColor(inst, prop, role, fromName, toName, fresh)
 	local cur = inst[prop]
-	if typeof(cur) ~= "Color3" then return end
-	local props = ThemeBaseColors[inst]
-	if not props then
-		props = {}
-		ThemeBaseColors[inst] = props
+	if typeof(cur) ~= "Color3" then
+		return
 	end
-	local base = props[prop]
-	if not base then
-		base = resolveColor(cur, role, fromName, fresh)
-		if not base then
-			-- Màu lạ/được set riêng: giữ màu hiện tại, không tự ý đổi.
-			return
-		end
-		props[prop] = base
+	local d = resolveColor(cur, role, fromName, fresh)
+	if d then
+		inst[prop] = themed(d, role, toName)
 	end
-	inst[prop] = themed(base, role, toName)
 end
 
 local function rebuildButtonGradient(inst)
@@ -500,14 +488,20 @@ local function rebuildButtonGradient(inst)
 	}
 end
 
-local function themeInstance(inst, fromName, toName, fresh)
-	-- Giữ logo, nút bật/tắt UI nổi và toggle trong giao diện màu trắng cố định.
-	if inst.Name == "Ruafimg" or inst.Name == "imgHide" or inst.Name == "checkbox" or inst.Name == "check" or inst.Name == "dut dit" then
-		if inst.Name == "imgHide" and (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) then
-			inst.ImageColor3 = Color3.fromRGB(255, 255, 255)
-		elseif inst.Name == "dut dit" and inst:IsA("Frame") then
-			inst.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+-- Object (hoặc cha của nó) có attribute NoTheme thì không đổi màu (logo, toggle bật/tắt)
+local function isExcluded(inst)
+	local p = inst
+	while p do
+		if p:GetAttribute("NoTheme") then
+			return true
 		end
+		p = p.Parent
+	end
+	return false
+end
+
+local function themeInstance(inst, fromName, toName, fresh)
+	if isExcluded(inst) then
 		return
 	end
 	if inst:IsA("GuiObject") then
@@ -556,6 +550,12 @@ local function keyRole(k)
 	return "bg"
 end
 
+-- Màu toggle giữ mặc định, không đổi theo theme
+local NO_THEME_KEYS = {
+	["Toggle Border Color"] = true,
+	["Toggle Checked Color"] = true,
+}
+
 local ThemeRoots = { Library_Function.Gui, Library_Function.NotiGui, Library_Function.HideGui }
 
 local function applyTheme(toName)
@@ -565,13 +565,8 @@ local function applyTheme(toName)
 	end
 	-- Các tween/hover về sau đọc màu từ UIColor => cập nhật luôn
 	for k, v in pairs(DefaultUIColor) do
-		if typeof(v) == "Color3" then
-			-- Logo và màu bật/tắt là màu cố định, không bị đổi theo theme.
-			if k ~= "Toggle Border Color" and k ~= "Toggle Checked Color" then
-				getgenv().UIColor[k] = themed(v, keyRole(k), toName)
-			else
-				getgenv().UIColor[k] = Color3.fromRGB(255, 255, 255)
-			end
+		if typeof(v) == "Color3" and not NO_THEME_KEYS[k] then
+			getgenv().UIColor[k] = themed(v, keyRole(k), toName)
 		end
 	end
 	CurrentTheme = toName
@@ -580,32 +575,23 @@ local function applyTheme(toName)
 			themeInstance(inst, fromName, toName, false)
 		end
 	end
-	-- Cố định màu nút bật/tắt UI nổi, logo và toggle là trắng, độc lập với theme.
-	btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
-	for _, root in ipairs(ThemeRoots) do
-		for _, inst in ipairs(root:GetDescendants()) do
-			if inst.Name == "checkbox" and inst:IsA("ImageLabel") then
-				inst.ImageColor3 = Color3.fromRGB(255, 255, 255)
-			elseif inst.Name == "check" and inst:IsA("Frame") then
-				inst.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-			end
+
+	-- Tween đang chạy lúc đổi theme (vd: item dropdown vừa chọn) vẫn trượt về màu CŨ
+	-- => quét lại sau khi tween kết thúc để sửa các màu còn sót.
+	task.delay(0.45, function()
+		if Destroyed or CurrentTheme ~= toName then
+			return
 		end
-	end
-	-- Dropdown item màu theo theme hiện tại, không lấy màu đã bị biến đổi từ theme trước.
-	for _, root in ipairs(ThemeRoots) do
-		for _, inst in ipairs(root:GetDescendants()) do
-			if inst:IsA("TextLabel") and inst.Name == "SampleItemTitle" then
-				inst.TextColor3 = getgenv().UIColor["Text Color"]
-			elseif inst:IsA("Frame") and inst.Name == "SampleItemBG" then
-				if inst.BackgroundTransparency <= 0.5 then
-					inst.BackgroundColor3 = getgenv().UIColor["Background 2 Color"] or getgenv().UIColor["Background 1 Color"]
+		for _, root in ipairs(ThemeRoots) do
+			for _, inst in ipairs(root:GetDescendants()) do
+				if toName == "Default" then
+					themeInstance(inst, fromName, "Default", false)
 				else
-					inst.BackgroundColor3 = getgenv().UIColor["Background 1 Color"]
+					themeInstance(inst, toName, toName, true)
 				end
 			end
 		end
-	end
+	end)
 end
 
 -- Object tạo sau khi đã đổi theme (tab/control thêm muộn, thông báo...) cũng được áp theme
@@ -776,6 +762,7 @@ local libCreateNoti = function(Setting)
 	Topnoti.Size = UDim2.new(1, 0, 0, 25)
 
 	Ruafimg.Name = "Ruafimg"
+	Ruafimg:SetAttribute("NoTheme", true) -- logo giữ nguyên màu
 	Ruafimg.Parent = Topnoti
 	Ruafimg.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
 	Ruafimg.BackgroundTransparency = 1.000
@@ -1007,6 +994,7 @@ function Library:CreateWindow(Setting)
 	TopStroke.Size = UDim2.new(1, 0, 0, 1)
 	
 	Ruafimg.Name = "Ruafimg"
+	Ruafimg:SetAttribute("NoTheme", true) -- logo giữ nguyên màu
 	Ruafimg.Parent = TopMain
 	Ruafimg.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	Ruafimg.BackgroundTransparency = 1.000
@@ -1027,12 +1015,11 @@ function Library:CreateWindow(Setting)
 	TextLabelMain.TextXAlignment = Enum.TextXAlignment.Left
 	TextLabelMain.TextColor3 = getgenv().UIColor["GUI Text Color"]
 
-	local function updateWindowTitleColors()
-		-- Giữ màu title/description theo màu chữ UI chung, không có màu riêng.
-		TextLabelMain.Text = tostring(TitleNameMain or "Dwac Hub") .. " " .. tostring(getgenv().MainDesc or "")
-		TextLabelMain.TextColor3 = getgenv().UIColor["GUI Text Color"]
-	end
-	updateWindowTitleColors()
+	local colorR = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[1])
+	local colorG = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[2])
+	local colorB = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[3])
+	local color = colorR .. ',' .. colorG .. ',' .. colorB
+    TextLabelMain.Text = "<font color=\"rgb(" .. tostring(color or "235,235,235") .. ")\">" .. tostring(TitleNameMain or "Dwac Hub") .. "</font> " .. tostring(getgenv().MainDesc or "")
 
 	PageControl.Name = "Background1"
 	PageControl.Parent = Concacmain
@@ -1855,8 +1842,10 @@ function Library:CreateWindow(Setting)
 				checkbox.Position = UDim2.new(1, -5, 0.5, 3)
 				checkbox.Size = UDim2.new(0, 25, 0, 25)
 				checkbox.Image = "rbxassetid://4552505888"
+				checkbox:SetAttribute("NoTheme", true) -- toggle bật/tắt giữ nguyên màu
 				checkbox.ImageColor3 = getgenv().UIColor["Toggle Border Color"]
 				check.Name = "check"
+				check:SetAttribute("NoTheme", true)
 				check.Parent = checkbox
 				check.AnchorPoint = Vector2.new(0.5, 0.5)
 				check.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
@@ -2816,14 +2805,7 @@ function Library:CreateWindow(Setting)
 				end
 
 				local function selColor()
-					-- Màu icon check; giữ riêng với màu nền của item được chọn.
 					return getgenv().UIColor["Dropdown Selected Check Color"]
-				end
-
-				local function selectedItemColor()
-					-- Dùng nền phụ của theme đang hoạt động để tránh màu xanh cố định
-					-- còn sót lại khi chuyển từ theme này về theme khác.
-					return getgenv().UIColor["Background 2 Color"] or getgenv().UIColor["Background 1 Color"]
 				end
 
 				local function setTitle(valueText)
@@ -2918,7 +2900,7 @@ function Library:CreateWindow(Setting)
 						entry.paintTween:Cancel()
 						entry.paintTween = nil
 					end
-					local color = selected and selectedItemColor() or getgenv().UIColor["Background 1 Color"]
+					local color = selected and selColor() or getgenv().UIColor["Dropdown Hover Color"]
 					local trans = selected and 0.5 or 1
 					local checkTrans = (Multi and selected) and 0 or 1
 					if instant or FADE_TIME <= 0 then
@@ -2943,8 +2925,8 @@ function Library:CreateWindow(Setting)
 						entry.paintTween:Cancel()
 					end
 					entry.paintTween = play(entry.bg, FADE_TIME, {
-						BackgroundColor3 = getgenv().UIColor["Background 1 Color"],
-						BackgroundTransparency = on and 0.35 or 1,
+						BackgroundColor3 = getgenv().UIColor["Dropdown Hover Color"],
+						BackgroundTransparency = on and 0.7 or 1,
 					})
 				end
 
@@ -3071,7 +3053,7 @@ function Library:CreateWindow(Setting)
 					bg.BorderSizePixel = 0
 					bg.Position = UDim2.new(0.5, 0, 0.5, 0)
 					bg.Size = UDim2.new(1, 0, 1, 0)
-					bg.BackgroundColor3 = getgenv().UIColor["Background 1 Color"]
+					bg.BackgroundColor3 = WHITE
 					bg.BackgroundTransparency = 1
 					bg.Parent = frame
 
@@ -3087,7 +3069,7 @@ function Library:CreateWindow(Setting)
 					label.Size = UDim2.new(1, -40, 1, 0)
 					label.Font = Enum.Font.GothamBlack
 					label.Text = key
-					label.TextColor3 = getgenv().UIColor["Text Color"]
+					label.TextColor3 = WHITE
 					label.TextSize = 14
 					label.TextStrokeTransparency = 0.5
 					label.TextXAlignment = Enum.TextXAlignment.Left
