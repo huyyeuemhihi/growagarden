@@ -550,7 +550,15 @@ local function keyRole(k)
 	return "bg"
 end
 
--- Màu toggle giữ mặc định, không đổi theo theme
+-- Các control tự đăng ký hàm vẽ lại khi đổi theme (vd: dropdown tô lại item đang chọn)
+local ThemeHooks = {}
+local function runThemeHooks()
+	for _, fn in ipairs(ThemeHooks) do
+		pcall(fn)
+	end
+end
+
+-- Màu toggle giữ mặc định, không đổi theme
 local NO_THEME_KEYS = {
 	["Toggle Border Color"] = true,
 	["Toggle Checked Color"] = true,
@@ -575,6 +583,7 @@ local function applyTheme(toName)
 			themeInstance(inst, fromName, toName, false)
 		end
 	end
+	runThemeHooks() -- huỷ tween đang chạy về màu cũ + vẽ lại bằng màu theme mới
 
 	-- Tween đang chạy lúc đổi theme (vd: item dropdown vừa chọn) vẫn trượt về màu CŨ
 	-- => quét lại sau khi tween kết thúc để sửa các màu còn sót.
@@ -591,6 +600,7 @@ local function applyTheme(toName)
 				end
 			end
 		end
+		runThemeHooks()
 	end)
 end
 
@@ -2929,6 +2939,15 @@ function Library:CreateWindow(Setting)
 						BackgroundTransparency = on and 0.7 or 1,
 					})
 				end
+
+				-- Đổi theme: vẽ lại ngay trạng thái chọn của mọi item (huỷ tween còn trỏ về màu cũ)
+				table.insert(ThemeHooks, function()
+					for _, e in ipairs(entries) do
+						if e.bg then
+							paint(e, e.selected and true or false, true)
+						end
+					end
+				end)
 
 				----------------------------------------------------------------
 				-- Mở / đóng (animation cuộn xuống / cuộn lên)
