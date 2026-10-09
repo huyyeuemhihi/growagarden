@@ -176,75 +176,64 @@ Library.DestroyUI = function()
 	end
 end
 
-if true then
-	local button = btnHide -- Assuming this is a TextButton or ImageButton
-	local UIS = game:GetService("UserInputService")
-	
+local btnHideMoved = false -- true nếu vừa kéo => bỏ qua click để không bật/tắt UI nhầm
+
+do
+	local button = btnHide
+	local DRAG_THRESHOLD = 6 -- px, kéo quá ngưỡng này mới tính là drag (không còn delay 0.1s)
+
 	local dragging = false
 	local dragInput, dragStart, startPos
-	local holdTime = 0.1 -- Time to hold before dragging is enabled
-	local holdStarted = 0
-	
-	-- Function to update the button's position
-	local function update(input)
+
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			btnHideMoved = false
+			dragInput = input
+			dragStart = input.Position
+			startPos = button.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	-- Nghe trên UserInputService (không phải button.InputChanged) để ngón tay trượt
+	-- ra ngoài nút vẫn nhận được sự kiện => hết bị khựng khi kéo nhanh.
+	uis.InputChanged:Connect(function(input)
+		if not dragging or not dragInput then
+			return
+		end
+		local isTrackedTouch = (input == dragInput)
+		local isMouseMove = (dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseMovement)
+		if not (isTrackedTouch or isMouseMove) then
+			return
+		end
+
 		local delta = input.Position - dragStart
+		if not btnHideMoved then
+			if delta.Magnitude < DRAG_THRESHOLD then
+				return
+			end
+			btnHideMoved = true
+		end
+
 		button.Position = UDim2.new(
 			startPos.X.Scale, startPos.X.Offset + delta.X,
 			startPos.Y.Scale, startPos.Y.Offset + delta.Y
 		)
-	end
-	
-	-- Function to detect the start of dragging (for both mouse and touch)
-	local function onInputBegan(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			holdStarted = tick() -- Record the time when holding starts
-			dragStart = input.Position
-			startPos = button.Position
-	
-			-- Listen for release to stop dragging
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					holdStarted = 0 -- Reset the hold timer
-				end
-			end)
-		end
-	end
-	
-	-- Function to detect when dragging stops
-	local function onInputEnded(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-			holdStarted = 0 -- Reset the hold timer
-		end
-	end
-	
-	-- Detect input movement (for both mouse and touch)
-	local function onInputChanged(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
-		end
-	end
-	
-	-- Connect the events
-	button.InputBegan:Connect(onInputBegan)
-	button.InputEnded:Connect(onInputEnded)
-	button.InputChanged:Connect(onInputChanged)
-	
-	-- RenderStepped updates the position while dragging
-	RunService.RenderStepped:Connect(function()
-		if holdStarted > 0 and (tick() - holdStarted >= holdTime) and not dragging then
-			dragging = true
-		end
-	
-		if dragging and dragInput then
-			update(dragInput)
-		end
 	end)
-		
 end
 
-btnHide.MouseButton1Click:Connect(function() 
+btnHide.MouseButton1Click:Connect(function()
+	if btnHideMoved then
+		btnHideMoved = false
+		return
+	end
 	Library.ToggleUI()
 end)
 
@@ -1287,7 +1276,7 @@ function Library:CreateWindow(Setting)
 					TweenService:Create(visibility_off, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"] / 2), {
 						ImageTransparency = sectionIsVisible and 1 or 0
 					}):Play()
-					TweenService:Create(Section, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"]), {
+					TweenService:Create(Section, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"] * 1.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size =  UDim2.new(1, -5, 0, (sectionIsVisible and SizeSectionY or 30))
 					}):Play()
 				end)
@@ -1519,7 +1508,7 @@ function Library:CreateWindow(Setting)
              ClickArea_1.Name = "ClickArea"
              ClickArea_1.Parent = RowBG_1
              ClickArea_1.AnchorPoint = Vector2.new(1, 0.5)
-             ClickArea_1.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
+             ClickArea_1.BackgroundColor3 = getgenv().UIColor["Button Color"]
              ClickArea_1.Position = UDim2.new(1, -8,0.5, 0)
              ClickArea_1.Size = UDim2.new(0, 94,0, 30)
              ClickArea_1.ClipsDescendants = true  -- THÊM DÒNG NÀY: Ngăn ripple tràn ra
@@ -1528,12 +1517,13 @@ function Library:CreateWindow(Setting)
              UICorner_3.CornerRadius = UDim.new(0,12)
              
              UIGradient_1.Parent = ClickArea_1
-             UIGradient_1.Color = ColorSequence.new{
-                 ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 216, 77)), 
-                 ColorSequenceKeypoint.new(0.4, Color3.fromRGB(235, 235, 235)), 
-                 ColorSequenceKeypoint.new(0.6, Color3.fromRGB(235, 186, 17)), 
-                 ColorSequenceKeypoint.new(1, Color3.fromRGB(215, 166, 7))
-             }
+             do
+                 local base = getgenv().UIColor["Button Color"]
+                 UIGradient_1.Color = ColorSequence.new{
+                     ColorSequenceKeypoint.new(0, base),
+                     ColorSequenceKeypoint.new(1, base:Lerp(Color3.new(0, 0, 0), 0.28))
+                 }
+             end
              UIGradient_1.Rotation = 90
              
              ImageLabel_1.Parent = ClickArea_1
@@ -1570,7 +1560,7 @@ function Library:CreateWindow(Setting)
              Button_1.Size = UDim2.new(1, 0,1, 0)
              Button_1.Font = Enum.Font.GothamBold
              Button_1.Text = "Click"
-             Button_1.TextColor3 = Color3.fromRGB(240, 240, 240)
+             Button_1.TextColor3 = getgenv().UIColor["Background Main Color"]
              Button_1.TextSize = 13
 
              -- UIScale mặc định
@@ -1599,8 +1589,8 @@ function Library:CreateWindow(Setting)
                     ripple.AnchorPoint = Vector2.new(0.5, 0.5)
                     ripple.Position = UDim2.new(0.5, 0, 0.5, 0)
                     ripple.Size = UDim2.new(0, 0, 0, 0)
-                    ripple.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-                    ripple.BackgroundTransparency = 0.6
+                    ripple.BackgroundColor3 = getgenv().UIColor["Background Main Color"]
+                    ripple.BackgroundTransparency = 0.75
                     ripple.ZIndex = 20
                     ripple.Parent = ClickArea_1
                     
@@ -2160,7 +2150,7 @@ function Library:CreateWindow(Setting)
 				local SortPairs = Setting.SortPairs
 				-- Tuỳ chọn mới (đều có giá trị mặc định, không bắt buộc):
 				local CloseOnSelect = Setting.CloseOnSelect == true                    -- tự đóng sau khi chọn (single)
-				local MaxHeight = math.max(tonumber(Setting.MaxHeight) or 170, 60)    -- chiều cao tối đa của list
+				local MaxHeight = math.max(tonumber(Setting.MaxHeight) or 110, 60)    -- chiều cao tối đa của list
 				local OpenTime = math.max(tonumber(Setting.AnimationTime) or 0.3, 0)  -- 0 = tắt animation
 				local CloseTime = OpenTime * 0.8
 
