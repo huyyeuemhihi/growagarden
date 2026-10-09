@@ -24,6 +24,8 @@ local T1UIColor = {
 	["Text Color"] = Color3.fromRGB(235, 235, 230),
 	["Placeholder Text Color"] = Color3.fromRGB(170, 170, 160),
 	["Title Text Color"] = Color3.fromRGB(235, 235, 235),
+	["Window Title Color"] = Color3.fromRGB(235, 235, 235),
+	["Window Description Color"] = Color3.fromRGB(235, 235, 230),
 	["Background Main Color"] = Color3.fromRGB(18, 18, 22),
 	["Background 1 Color"] = Color3.fromRGB(28, 28, 34),
 	["Background 1 Transparency"] = 0.1,
@@ -486,6 +488,10 @@ local function rebuildButtonGradient(inst)
 end
 
 local function themeInstance(inst, fromName, toName, fresh)
+	-- Giữ nguyên tint logo và màu checkbox/toggle; các phần tử này dùng màu riêng.
+	if inst.Name == "Ruafimg" or inst.Name == "checkbox" or inst.Name == "check" then
+		return
+	end
 	if inst:IsA("GuiObject") then
 		setColor(inst, "BackgroundColor3", "bg", fromName, toName, fresh)
 		if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
@@ -524,7 +530,7 @@ local function themeInstance(inst, fromName, toName, fresh)
 end
 
 local function keyRole(k)
-	for _, hint in ipairs({ "Text", "Desc", "Placeholder", "Label" }) do
+	for _, hint in ipairs({ "Text", "Desc", "Placeholder", "Label", "Window Title", "Window Description" }) do
 		if string.find(k, hint, 1, true) then
 			return "text"
 		end
@@ -542,13 +548,36 @@ local function applyTheme(toName)
 	-- Các tween/hover về sau đọc màu từ UIColor => cập nhật luôn
 	for k, v in pairs(DefaultUIColor) do
 		if typeof(v) == "Color3" then
-			getgenv().UIColor[k] = themed(v, keyRole(k), toName)
+			-- Logo và màu bật/tắt là màu cố định, không bị đổi theo theme.
+			if k ~= "Toggle Border Color" and k ~= "Toggle Checked Color" then
+				getgenv().UIColor[k] = themed(v, keyRole(k), toName)
+			else
+				getgenv().UIColor[k] = v
+			end
 		end
 	end
 	CurrentTheme = toName
+	-- RichText không được themeInstance đổi màu trực tiếp.
+	if type(getgenv().DwacUpdateWindowTitleColors) == "function" then
+		pcall(getgenv().DwacUpdateWindowTitleColors)
+	end
 	for _, root in ipairs(ThemeRoots) do
 		for _, inst in ipairs(root:GetDescendants()) do
 			themeInstance(inst, fromName, toName, false)
+		end
+	end
+	-- Dropdown item màu theo theme hiện tại, không lấy màu đã bị biến đổi từ theme trước.
+	for _, root in ipairs(ThemeRoots) do
+		for _, inst in ipairs(root:GetDescendants()) do
+			if inst:IsA("TextLabel") and inst.Name == "SampleItemTitle" then
+				inst.TextColor3 = getgenv().UIColor["Text Color"]
+			elseif inst:IsA("Frame") and inst.Name == "SampleItemBG" then
+				if inst.BackgroundTransparency <= 0.5 then
+					inst.BackgroundColor3 = getgenv().UIColor["Dropdown Selected Color"]
+				else
+					inst.BackgroundColor3 = getgenv().UIColor["Background 1 Color"]
+				end
+			end
 		end
 	end
 end
@@ -972,11 +1001,20 @@ function Library:CreateWindow(Setting)
 	TextLabelMain.TextXAlignment = Enum.TextXAlignment.Left
 	TextLabelMain.TextColor3 = getgenv().UIColor["GUI Text Color"]
 
-	local colorR = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[1])
-	local colorG = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[2])
-	local colorB = tostring(Library_Function.Getcolor(getgenv().UIColor['Title Text Color'])[3])
-	local color = colorR .. ',' .. colorG .. ',' .. colorB
-    TextLabelMain.Text = "<font color=\"rgb(" .. tostring(color or "235,235,235") .. ")\">" .. tostring(TitleNameMain or "Dwac Hub") .. "</font> " .. tostring(getgenv().MainDesc or "")
+	local function updateWindowTitleColors()
+		local titleRGB = Library_Function.Getcolor(getgenv().UIColor["Window Title Color"] or getgenv().UIColor["Title Text Color"])
+		local descRGB = Library_Function.Getcolor(getgenv().UIColor["Window Description Color"] or getgenv().UIColor["GUI Text Color"])
+		local titleColor = string.format("%d,%d,%d", titleRGB[1], titleRGB[2], titleRGB[3])
+		local descColor = string.format("%d,%d,%d", descRGB[1], descRGB[2], descRGB[3])
+		local safeTitle = tostring(TitleNameMain or "Dwac Hub")
+		local safeDesc = tostring(getgenv().MainDesc or "")
+		-- Escape RichText special characters so titles/descriptions cannot break the markup.
+		safeTitle = safeTitle:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+		safeDesc = safeDesc:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+		TextLabelMain.Text = '<font color="rgb(' .. titleColor .. ')">' .. safeTitle .. '</font> <font color="rgb(' .. descColor .. ')">' .. safeDesc .. '</font>'
+	end
+	updateWindowTitleColors()
+	getgenv().DwacUpdateWindowTitleColors = updateWindowTitleColors
 
 	PageControl.Name = "Background1"
 	PageControl.Parent = Concacmain
