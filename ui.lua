@@ -1,4 +1,4 @@
-if getgenv().Nousigi then 
+if getgenv().Dwac then 
 	if game.CoreGui:FindFirstChild("Dwac Hub GUI") then
 		for i, v in ipairs(game.CoreGui:GetChildren()) do
 			if string.find(v.Name,  "Dwac Hub") then
@@ -7,9 +7,11 @@ if getgenv().Nousigi then
 		end
 	end
 end
-getgenv().Nousigi = true
+getgenv().Dwac = true
 
 local IsMobile = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TouchGui') ~= nil
+-- Hệ số tốc độ animation: mobile chạy nhanh hơn chút (0.7) thay vì tắt hẳn.
+-- Muốn tự chỉnh: getgenv().DwacAnimationScale = 0 (tắt) / 1 (bình thường) trước khi load UI.
 local AnimScale = tonumber(getgenv().DwacAnimationScale) or (IsMobile and 0.7 or 1)
 local T1UIColor = {
 	["Border Color"] = Color3.fromRGB(235, 235, 235),
@@ -753,7 +755,8 @@ function Library:CreateWindow(Setting)
 	UIPage.EasingDirection = Enum.EasingDirection.InOut
 	UIPage.EasingStyle = Enum.EasingStyle.Quart
 	UIPage.Padding = UDim.new(0, 10)
-	UIPage.TweenTime = math.clamp(tonumber(getgenv().UIColor["Tween Animation 1 Speed"]) or 0.2, 0, 0.25)
+	-- Chuyển tab giữ như cũ: mobile không animation (chuyển tức thì), PC giữ nguyên
+	UIPage.TweenTime = IsMobile and 0 or math.clamp(tonumber(getgenv().UIColor["Tween Animation 1 Speed"]) or 0.2, 0, 0.25)
 
 	UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 		ControlList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 5)
@@ -1176,11 +1179,11 @@ function Library:CreateWindow(Setting)
 			for i, v in next, ControlList:GetChildren() do
 				if not (v:IsA('UIListLayout')) then
 					if v.Name == Page_Name .. "_Control" then 
-						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"]), {
+						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(IsMobile and 0 or getgenv().UIColor["Tween Animation 1 Speed"]), {
 							BackgroundTransparency = 0
 						}):Play()
 					else
-						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"]), {
+						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(IsMobile and 0 or getgenv().UIColor["Tween Animation 1 Speed"]), {
 							BackgroundTransparency = 1
 						}):Play()
 					end
