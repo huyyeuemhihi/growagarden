@@ -1,4 +1,4 @@
-if getgenv().Nousigi then 
+if getgenv().Dwac then 
 	if game.CoreGui:FindFirstChild("Dwac Hub GUI") then
 		for i, v in ipairs(game.CoreGui:GetChildren()) do
 			if string.find(v.Name,  "Dwac Hub") then
@@ -7,9 +7,12 @@ if getgenv().Nousigi then
 		end
 	end
 end
-getgenv().Nousigi = true
+getgenv().Dwac = true
 
-local DisableAnimation = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TouchGui')
+local IsMobile = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TouchGui') ~= nil
+-- Hệ số tốc độ animation: mobile chạy nhanh hơn chút (0.7) thay vì tắt hẳn.
+-- Muốn tự chỉnh: getgenv().DwacAnimationScale = 0 (tắt) / 1 (bình thường) trước khi load UI.
+local AnimScale = tonumber(getgenv().DwacAnimationScale) or (IsMobile and 0.7 or 1)
 local T1UIColor = {
 	["Border Color"] = Color3.fromRGB(235, 235, 235),
 	["Click Effect Color"] = Color3.fromRGB(230, 230, 230),
@@ -42,9 +45,9 @@ local T1UIColor = {
 	["Box Highlight Color"] = Color3.fromRGB(235, 235, 235),
 	["Slider Line Color"] = Color3.fromRGB(235, 235, 235),
 	["Slider Highlight Color"] = Color3.fromRGB(175, 175, 175),
-	["Tween Animation 1 Speed"] = DisableAnimation and 0 or 0.25,
-	["Tween Animation 2 Speed"] = DisableAnimation and 0 or 0.5,
-	["Tween Animation 3 Speed"] = DisableAnimation and 0 or 0.1,
+	["Tween Animation 1 Speed"] = 0.25 * AnimScale,
+	["Tween Animation 2 Speed"] = 0.5 * AnimScale,
+	["Tween Animation 3 Speed"] = 0.1 * AnimScale,
 	["Text Stroke Transparency"] = 0.5
 }
 
@@ -60,16 +63,58 @@ local TweenService = game:GetService('TweenService')
 local uis = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
+local CoreGui = game:GetService("CoreGui")
+
+-- Quản lý connection: mọi kết nối tới service (UserInputService...) đều đi qua track()
+-- để DestroyUI() ngắt sạch, chạy lại script không bị chồng connection.
+local Connections = {}
+local Destroyed = false
+
+local function track(conn)
+	Connections[conn] = true
+	return conn
+end
+
+local function untrack(conn)
+	Connections[conn] = nil
+	pcall(function() conn:Disconnect() end)
+end
+
+local function sweepOldGuis()
+	for _, g in ipairs(CoreGui:GetChildren()) do
+		if string.find(g.Name, "Dwac Hub", 1, true) then
+			pcall(function() g:Destroy() end)
+		end
+	end
+end
+
+local function destroyAll()
+	Destroyed = true
+	for conn in pairs(Connections) do
+		pcall(function() conn:Disconnect() end)
+	end
+	table.clear(Connections)
+	sweepOldGuis()
+end
+
+-- Chạy lại script: dọn bản cũ trước khi tạo bản mới
+if type(getgenv().DwacCleanup) == "function" then
+	pcall(getgenv().DwacCleanup)
+end
+sweepOldGuis()
+getgenv().DwacCleanup = destroyAll
+
 local function makeDraggable(topBarObject, object)
-	local dragging = nil
-	local dragInput = nil
-	local dragStart = nil
-	local startPosition = nil
+	local dragging = false
+	local dragInput, dragStart, startPosition
+
 	topBarObject.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
+			dragInput = input
 			dragStart = input.Position
 			startPosition = object.Position
+
 			input.Changed:Connect(function()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
@@ -77,22 +122,50 @@ local function makeDraggable(topBarObject, object)
 			end)
 		end
 	end)
-	topBarObject.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
+
+	-- Nghe trên UserInputService để kéo nhanh/ra ngoài vùng vẫn mượt; đặt vị trí trực tiếp (không tween)
+	track(uis.InputChanged:Connect(function(input)
+		if not dragging or not dragInput then
+			return
 		end
-	end)
-	uis.InputChanged:Connect(function(input)
-		if input == dragInput and dragging then
-			local delta = input.Position - dragStart
-			if not djtmemay and cac then
-				TweenService:Create(object, TweenInfo.new(DisableAnimation and 0 or 0.35, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {
-					Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
-				}):Play()
-			elseif not djtmemay and not cac then
-				object.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+		local isTrackedTouch = (input == dragInput)
+		local isMouseMove = (dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseMovement)
+		if not (isTrackedTouch or isMouseMove) then
+			return
+		end
+		local delta = input.Position - dragStart
+		object.Position = UDim2.new(
+			startPosition.X.Scale, startPosition.X.Offset + delta.X,
+			startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
+		)
+	end))
+end
+
+-- Kéo slider dùng chung: chỉ kết nối khi đang kéo, nhả tay là ngắt
+-- (thay cho RenderStepped chạy liên tục của mỗi slider trước đây)
+local function bindSliderDrag(button, onDrag)
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		local moveConn, endConn
+		local function stop()
+			if moveConn then untrack(moveConn) moveConn = nil end
+			if endConn then untrack(endConn) endConn = nil end
+		end
+		onDrag(input.Position.X)
+		moveConn = track(uis.InputChanged:Connect(function(moved)
+			if moved == input or (input.UserInputType == Enum.UserInputType.MouseButton1
+				and moved.UserInputType == Enum.UserInputType.MouseMovement) then
+				onDrag(moved.Position.X)
 			end
-		end
+		end))
+		endConn = track(input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				stop()
+			end
+		end))
 	end)
 end
 
@@ -102,10 +175,13 @@ Library_Function.Gui.Name = 'Dwac Hub GUI'
 Library_Function.Gui.Enabled = false
 
 getgenv().ReadyForGuiLoaded = false
-spawn(function()
+task.spawn(function()
 	repeat
 		task.wait()
-	until getgenv().ReadyForGuiLoaded
+	until getgenv().ReadyForGuiLoaded or Destroyed
+	if Destroyed then
+		return
+	end
 	if getgenv().UIToggled then
 		Library_Function.Gui.Enabled = true
 	end
@@ -151,10 +227,10 @@ UICornerBtnHide.CornerRadius = UDim.new(1, 0)
 Library.ToggleUI = function()
 	getgenv().UIToggled = not getgenv().UIToggled
 	local sizeXY = getgenv().UIToggled and (getgenv().T1 and 30 or 40) or (getgenv().T1 and 25 or 30)
-	TweenService:Create(imgHide, TweenInfo.new(DisableAnimation and 0 or .25), {
+	TweenService:Create(imgHide, TweenInfo.new(.25 * AnimScale), {
 		Size = UDim2.new(0, sizeXY, 0, sizeXY)
 	}):Play()
-	TweenService:Create(btnHideFrame, TweenInfo.new(DisableAnimation and 0 or .25), {
+	TweenService:Create(btnHideFrame, TweenInfo.new(.25 * AnimScale), {
 		BackgroundTransparency = getgenv().UIToggled and 0 or .25
 	}):Play()
 	if game.CoreGui:FindFirstChild("Dwac Hub GUI") then
@@ -167,84 +243,67 @@ Library.ToggleUI = function()
 end
 
 Library.DestroyUI = function()
-	if game.CoreGui:FindFirstChild("Dwac Hub GUI") then
-		for i, v in ipairs(game.CoreGui:GetChildren()) do
-			if string.find(v.Name,  "Dwac Hub") then
-				v:Destroy()
-			end
-		end
-	end
+	destroyAll() -- ngắt toàn bộ connection + xoá GUI
 end
 
-if true then
-	local button = btnHide -- Assuming this is a TextButton or ImageButton
-	local UIS = game:GetService("UserInputService")
-	
+local btnHideMoved = false -- true nếu vừa kéo => bỏ qua click để không bật/tắt UI nhầm
+
+do
+	local button = btnHide
+	local DRAG_THRESHOLD = 6 -- px, kéo quá ngưỡng này mới tính là drag (không còn delay 0.1s)
+
 	local dragging = false
 	local dragInput, dragStart, startPos
-	local holdTime = 0.1 -- Time to hold before dragging is enabled
-	local holdStarted = 0
-	
-	-- Function to update the button's position
-	local function update(input)
+
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			btnHideMoved = false
+			dragInput = input
+			dragStart = input.Position
+			startPos = button.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	-- Nghe trên UserInputService (không phải button.InputChanged) để ngón tay trượt
+	-- ra ngoài nút vẫn nhận được sự kiện => hết bị khựng khi kéo nhanh.
+	track(uis.InputChanged:Connect(function(input)
+		if not dragging or not dragInput then
+			return
+		end
+		local isTrackedTouch = (input == dragInput)
+		local isMouseMove = (dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseMovement)
+		if not (isTrackedTouch or isMouseMove) then
+			return
+		end
+
 		local delta = input.Position - dragStart
+		if not btnHideMoved then
+			if delta.Magnitude < DRAG_THRESHOLD then
+				return
+			end
+			btnHideMoved = true
+		end
+
 		button.Position = UDim2.new(
 			startPos.X.Scale, startPos.X.Offset + delta.X,
 			startPos.Y.Scale, startPos.Y.Offset + delta.Y
 		)
-	end
-	
-	-- Function to detect the start of dragging (for both mouse and touch)
-	local function onInputBegan(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			holdStarted = tick() -- Record the time when holding starts
-			dragStart = input.Position
-			startPos = button.Position
-	
-			-- Listen for release to stop dragging
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					holdStarted = 0 -- Reset the hold timer
-				end
-			end)
-		end
-	end
-	
-	-- Function to detect when dragging stops
-	local function onInputEnded(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-			holdStarted = 0 -- Reset the hold timer
-		end
-	end
-	
-	-- Detect input movement (for both mouse and touch)
-	local function onInputChanged(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
-		end
-	end
-	
-	-- Connect the events
-	button.InputBegan:Connect(onInputBegan)
-	button.InputEnded:Connect(onInputEnded)
-	button.InputChanged:Connect(onInputChanged)
-	
-	-- RenderStepped updates the position while dragging
-	RunService.RenderStepped:Connect(function()
-		if holdStarted > 0 and (tick() - holdStarted >= holdTime) and not dragging then
-			dragging = true
-		end
-	
-		if dragging and dragInput then
-			update(dragInput)
-		end
-	end)
-		
+	end))
 end
 
-btnHide.MouseButton1Click:Connect(function() 
+btnHide.MouseButton1Click:Connect(function()
+	if btnHideMoved then
+		btnHideMoved = false
+		return
+	end
 	Library.ToggleUI()
 end)
 
@@ -450,9 +509,6 @@ function Library:CreateWindow(Setting)
         getgenv().UIColor["Logo Image"] = Setting.Image
     end
     
-	local djtmemay = false
-	cac = false
-
 	local Main = Instance.new("Frame")
 	local maingui = Instance.new("ImageLabel")
 	local MainCorner = Instance.new("UICorner")
@@ -699,7 +755,8 @@ function Library:CreateWindow(Setting)
 	UIPage.EasingDirection = Enum.EasingDirection.InOut
 	UIPage.EasingStyle = Enum.EasingStyle.Quart
 	UIPage.Padding = UDim.new(0, 10)
-	UIPage.TweenTime = math.clamp(tonumber(getgenv().UIColor["Tween Animation 1 Speed"]) or 0.2, 0, 0.25)
+	-- Chuyển tab giữ như cũ: mobile không animation (chuyển tức thì), PC giữ nguyên
+	UIPage.TweenTime = IsMobile and 0 or math.clamp(tonumber(getgenv().UIColor["Tween Animation 1 Speed"]) or 0.2, 0, 0.25)
 
 	UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 		ControlList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 5)
@@ -720,9 +777,16 @@ function Library:CreateWindow(Setting)
 
     -- Thêm biến để lưu thông tin section
     local sectionInfo = {}
+
+    -- Quản lý tab để search tự nhảy sang tab có kết quả
+    local TabSwitchers = {}   -- [tên tab] = hàm chuyển sang tab đó
+    local TabOrder = {}       -- thứ tự tab
+    local CurrentTabName = nil
     
-    -- Tạo hàm GlobalSearch nếu chưa tồn tại
-    if not GlobalSearch then
+    -- GlobalSearch là local và tạo lại cho mỗi window
+    -- (trước đây là global nên chạy lại script sẽ search nhầm vào UI cũ đã bị xoá)
+    local GlobalSearch
+    do
         GlobalSearch = function(searchText)
             searchText = string.lower(searchText)
             
@@ -828,11 +892,21 @@ function Library:CreateWindow(Setting)
                 end
             end
             
-            -- Hiển thị các tab có kết quả
+            -- Hiển thị các tab có kết quả (so khớp đúng tên tab)
             for tabName, _ in pairs(foundTabs) do
                 for _, tab in pairs(ControlList:GetChildren()) do
-                    if not tab:IsA('UIListLayout') and string.find(tab.Name, tabName, 1, true) then
+                    if not tab:IsA('UIListLayout') and tab.Name == (tabName .. "_Control") then
                         tab.Visible = true
+                    end
+                end
+            end
+
+            -- Tab đang mở không có kết quả => tự nhảy sang tab đầu tiên có kết quả
+            if next(foundTabs) and not foundTabs[CurrentTabName] then
+                for _, tabName in ipairs(TabOrder) do
+                    if foundTabs[tabName] and TabSwitchers[tabName] then
+                        TabSwitchers[tabName]()
+                        break
                     end
                 end
             end
@@ -1109,7 +1183,8 @@ function Library:CreateWindow(Setting)
 			end
 		end
 
-		PageButton.MouseButton1Click:Connect(function()
+		local function SwitchPage()
+			CurrentTabName = Page_Name
 			if tostring(UIPage.CurrentPage) == PageContainer.Name then 
 				return
 			end
@@ -1122,17 +1197,24 @@ function Library:CreateWindow(Setting)
 			for i, v in next, ControlList:GetChildren() do
 				if not (v:IsA('UIListLayout')) then
 					if v.Name == Page_Name .. "_Control" then 
-						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"]), {
+						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(IsMobile and 0 or getgenv().UIColor["Tween Animation 1 Speed"]), {
 							BackgroundTransparency = 0
 						}):Play()
 					else
-						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"]), {
+						TweenService:Create(v.Frame.Line.PageInLine, TweenInfo.new(IsMobile and 0 or getgenv().UIColor["Tween Animation 1 Speed"]), {
 							BackgroundTransparency = 1
 						}):Play()
 					end
 				end
 			end
-		end)
+		end
+
+		TabSwitchers[Page_Name] = SwitchPage
+		table.insert(TabOrder, Page_Name)
+		if not CurrentTabName then
+			CurrentTabName = Page_Name
+		end
+		PageButton.MouseButton1Click:Connect(SwitchPage)
 
 		local pageFunction = {}
 
@@ -1519,7 +1601,7 @@ function Library:CreateWindow(Setting)
              ClickArea_1.Name = "ClickArea"
              ClickArea_1.Parent = RowBG_1
              ClickArea_1.AnchorPoint = Vector2.new(1, 0.5)
-             ClickArea_1.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
+             ClickArea_1.BackgroundColor3 = getgenv().UIColor["Button Color"]
              ClickArea_1.Position = UDim2.new(1, -8,0.5, 0)
              ClickArea_1.Size = UDim2.new(0, 94,0, 30)
              ClickArea_1.ClipsDescendants = true  -- THÊM DÒNG NÀY: Ngăn ripple tràn ra
@@ -1528,12 +1610,13 @@ function Library:CreateWindow(Setting)
              UICorner_3.CornerRadius = UDim.new(0,12)
              
              UIGradient_1.Parent = ClickArea_1
-             UIGradient_1.Color = ColorSequence.new{
-                 ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 216, 77)), 
-                 ColorSequenceKeypoint.new(0.4, Color3.fromRGB(235, 235, 235)), 
-                 ColorSequenceKeypoint.new(0.6, Color3.fromRGB(235, 186, 17)), 
-                 ColorSequenceKeypoint.new(1, Color3.fromRGB(215, 166, 7))
-             }
+             do
+                 local base = getgenv().UIColor["Button Color"]
+                 UIGradient_1.Color = ColorSequence.new{
+                     ColorSequenceKeypoint.new(0, base),
+                     ColorSequenceKeypoint.new(1, base:Lerp(Color3.new(0, 0, 0), 0.28))
+                 }
+             end
              UIGradient_1.Rotation = 90
              
              ImageLabel_1.Parent = ClickArea_1
@@ -1570,7 +1653,7 @@ function Library:CreateWindow(Setting)
              Button_1.Size = UDim2.new(1, 0,1, 0)
              Button_1.Font = Enum.Font.GothamBold
              Button_1.Text = "Click"
-             Button_1.TextColor3 = Color3.fromRGB(240, 240, 240)
+             Button_1.TextColor3 = getgenv().UIColor["Background Main Color"]
              Button_1.TextSize = 13
 
              -- UIScale mặc định
@@ -1599,8 +1682,8 @@ function Library:CreateWindow(Setting)
                     ripple.AnchorPoint = Vector2.new(0.5, 0.5)
                     ripple.Position = UDim2.new(0.5, 0, 0.5, 0)
                     ripple.Size = UDim2.new(0, 0, 0, 0)
-                    ripple.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-                    ripple.BackgroundTransparency = 0.6
+                    ripple.BackgroundColor3 = getgenv().UIColor["Background Main Color"]
+                    ripple.BackgroundTransparency = 0.75
                     ripple.ZIndex = 20
                     ripple.Parent = ClickArea_1
                     
@@ -2021,66 +2104,29 @@ function Library:CreateWindow(Setting)
                     end
                     
                     
-                    local dragging = false
-                    local dragInput
-                    local holdTime = 0
-                    local holdStarted = 0
-                    
-                    local function onInputBegan(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                            holdStarted = tick()
-                            
-                            input.Changed:Connect(function()
-                                if input.UserInputState == Enum.UserInputState.End then
-                                    dragging = false
-                                    holdStarted = 0
-                                end
-                            end)
-                        end
-                    end
-                    
-                    local function onInputEnded(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                            dragging = false
-                            holdStarted = 0
-                        end
-                    end
-                    
-                    local function onInputChanged(input)
-                        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-                            dragInput = input
-                        end
-                    end
-                    
-                    SliderButton.InputBegan:Connect(onInputBegan)
-                    SliderButton.InputEnded:Connect(onInputEnded)
-                    SliderButton.InputChanged:Connect(onInputChanged)
-                    
-                    RunService.RenderStepped:Connect(function()
-                        if holdStarted > 0 and (tick() - holdStarted >= holdTime) and not dragging then
-                            dragging = true
+                    local function onDrag(x)
+                        local trackWidth = math.max(SliderBar.AbsoluteSize.X, 1)
+                        local percentage = math.clamp((x - SliderBar.AbsolutePosition.X) / trackWidth, 0, 1)
+                        local value = minValue + (maxValue - minValue) * percentage
+                        
+                        if Rounding then
+                            value = tonumber(string.format("%." .. Rounding .. "f", value))
+                        elseif not Precise then
+                            value = math.floor(value)
                         end
                         
-                        if dragging and dragInput then
-                            local trackWidth = math.max(SliderBar.AbsoluteSize.X, 1)
-                            local percentage = math.clamp((dragInput.Position.X - SliderBar.AbsolutePosition.X) / trackWidth, 0, 1)
-                            local barWidth = percentage * trackWidth
-                            local value = minValue + (maxValue - minValue) * percentage
-                            
-                            if Rounding then
-                                value = tonumber(string.format("%.".. Rounding .."f", value))
-                            elseif not Precise then
-                                value = math.floor(value)
-                            end
-                            
-                            value = math.clamp(value, minValue, maxValue)
-                            
+                        value = math.clamp(value, minValue, maxValue)
+                        Bar.Size = UDim2.new(percentage, 0, 1, 0)
+                        
+                        -- Chỉ gọi callback khi giá trị thật sự đổi
+                        if tonumber(Sliderbox_2.Text) ~= value then
                             pcall(function()
                                 callBackAndSetText(value)
                             end)
-                            Bar.Size = UDim2.new(percentage, 0, 1, 0)
                         end
-                    end)
+                    end
+                    
+                    bindSliderDrag(SliderButton, onDrag)
                     
                     local function GetSliderValue(Value)
                         Value = tonumber(Value) or minValue
@@ -2811,11 +2857,11 @@ function Library:CreateWindow(Setting)
 						stopDrag()
 						DropdownScroll.ScrollingEnabled = false -- không cuộn list khi đang kéo slider
 						updateFromX(input.Position.X)
-						moveConn = uis.InputChanged:Connect(function(moved)
+						moveConn = track(uis.InputChanged:Connect(function(moved)
 							if moved.UserInputType == Enum.UserInputType.MouseMovement or moved.UserInputType == Enum.UserInputType.Touch then
 								updateFromX(moved.Position.X)
 							end
-						end)
+						end))
 						endConn = input.Changed:Connect(function()
 							if input.UserInputState == Enum.UserInputState.End then
 								stopDrag()
@@ -3141,7 +3187,7 @@ function sectionFunction:AddKeyBind(Setting, Callback)
         task.wait(0.2)
         
         local Connection
-        Connection = uis.InputBegan:Connect(function(input)
+        Connection = track(uis.InputBegan:Connect(function(input)
             if Picking then
                 local Key
                 
@@ -3157,14 +3203,14 @@ function sectionFunction:AddKeyBind(Setting, Callback)
                     Picking = false
                     CurrentKey = Key
                     Bindkey.Text = Key
-                    Connection:Disconnect()
+                    untrack(Connection)
                 end
             end
-        end)
+        end))
     end)
     
     -- Input Began (Press)
-    uis.InputBegan:Connect(function(input, gpe)
+    track(uis.InputBegan:Connect(function(input, gpe)
         if gpe or Picking then return end
         if uis:GetFocusedTextBox() then return end
         
@@ -3186,10 +3232,10 @@ function sectionFunction:AddKeyBind(Setting, Callback)
                 pcall(Callback, true)
             end
         end
-    end)
+    end))
     
     -- Input Ended (Release) - Only for Hold mode
-    uis.InputEnded:Connect(function(input)
+    track(uis.InputEnded:Connect(function(input)
         if Picking then return end
         if uis:GetFocusedTextBox() then return end
         
@@ -3206,7 +3252,7 @@ function sectionFunction:AddKeyBind(Setting, Callback)
             HoldActive = false
             pcall(Callback, false)
         end
-    end)
+    end))
     
     local controlData = {
         Name = TitleText,
@@ -3490,65 +3536,22 @@ end
 					Sliderbox_2.Text = tostring(DefaultValue)
 					Bar.Size = UDim2.new(1 - ((maxValue - DefaultValue) / (maxValue - minValue)), 0, 0, 6)
 				end
-				local dragging = false
-				local dragInput
-				local holdTime = 0 -- Time to hold before dragging is enabled
-				local holdStarted = 0
-
-						-- Function to detect the start of dragging (for both mouse and touch)
-				local function onInputBegan(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						holdStarted = tick() -- Record the time when holding starts
-						
-								-- Listen for release to stop dragging
-						input.Changed:Connect(function()
-							if input.UserInputState == Enum.UserInputState.End then
-								dragging = false
-								holdStarted = 0 -- Reset the hold timer
-							end
-						end)
-					end
-				end
-						
-						-- Function to detect when dragging stops
-				local function onInputEnded(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = false
-						holdStarted = 0 -- Reset the hold timer
-					end
-				end
-
-						-- Detect input movement (for both mouse and touch)
-				local function onInputChanged(input)
-					if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-						dragInput = input
-					end
-				end
-						
-						-- Connect the events
-				SliderButton.InputBegan:Connect(onInputBegan)
-				SliderButton.InputEnded:Connect(onInputEnded)
-				SliderButton.InputChanged:Connect(onInputChanged)
-						
-						-- RenderStepped updates the position while dragging
-				RunService.RenderStepped:Connect(function()
-					if holdStarted > 0 and (tick() - holdStarted >= holdTime) and not dragging then
-						dragging = true
-					end
-					if dragging and dragInput then
-						local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
-					local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+				local function onDrag(x)
+					local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+					local ratio = math.clamp((x - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
 					local rawValue = tonumber(minValue) + (tonumber(maxValue) - tonumber(minValue)) * ratio
 					local decimals = math.clamp(tonumber(Setting.Rouding) or 0, 0, 4)
 					local value = decimals > 0 and tonumber(string.format("%." .. decimals .. "f", rawValue)) or math.floor(rawValue + 0.5)
+					Bar.Size = UDim2.new(ratio, 0, 0, 6)
+					-- Chỉ gọi callback khi giá trị thật sự đổi
+					if tonumber(Sliderbox_2.Text) ~= value then
 						pcall(function()
 							callBackAndSetText(value)
 						end)
-						local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
-										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
-										Bar.Size = UDim2.new(ratio, 0, 0, 6)
 					end
-				end)
+				end
+
+				bindSliderDrag(SliderButton, onDrag)
 				local function GetSliderValue(Value)
 					if tonumber(Value) <= minValue then
 						Bar.Size = UDim2.new(0, (0 * SizeChia), 0, 6)
