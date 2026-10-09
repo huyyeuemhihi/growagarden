@@ -211,6 +211,9 @@ btnHideFrame.Position = UDim2.new(0, 0, 1, 0)
 btnHideFrame.Name = "dut dit"
 btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 btnHideFrame.BackgroundTransparency = getgenv().UIToggled and 0 or .25
+btnHideFrame.Name = "dut dit"
+imgHide.Name = "imgHide"
+imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
 
 local imgHide = Instance.new('ImageLabel', btnHide)
 imgHide.AnchorPoint = Vector2.new(0, 0)
@@ -498,8 +501,13 @@ local function rebuildButtonGradient(inst)
 end
 
 local function themeInstance(inst, fromName, toName, fresh)
-	-- Giữ nguyên tint logo và màu checkbox/toggle; các phần tử này dùng màu riêng.
-	if inst.Name == "Ruafimg" or inst.Name == "checkbox" or inst.Name == "check" then
+	-- Giữ logo, nút bật/tắt UI nổi và toggle trong giao diện màu trắng cố định.
+	if inst.Name == "Ruafimg" or inst.Name == "imgHide" or inst.Name == "checkbox" or inst.Name == "check" or inst.Name == "dut dit" then
+		if inst.Name == "imgHide" and (inst:IsA("ImageLabel") or inst:IsA("ImageButton")) then
+			inst.ImageColor3 = Color3.fromRGB(255, 255, 255)
+		elseif inst.Name == "dut dit" and inst:IsA("Frame") then
+			inst.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		end
 		return
 	end
 	if inst:IsA("GuiObject") then
@@ -572,7 +580,9 @@ local function applyTheme(toName)
 			themeInstance(inst, fromName, toName, false)
 		end
 	end
-	-- Cố định màu toggle bật/tắt là trắng, độc lập với theme.
+	-- Cố định màu nút bật/tắt UI nổi, logo và toggle là trắng, độc lập với theme.
+	btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
 	for _, root in ipairs(ThemeRoots) do
 		for _, inst in ipairs(root:GetDescendants()) do
 			if inst.Name == "checkbox" and inst:IsA("ImageLabel") then
@@ -589,7 +599,7 @@ local function applyTheme(toName)
 				inst.TextColor3 = getgenv().UIColor["Text Color"]
 			elseif inst:IsA("Frame") and inst.Name == "SampleItemBG" then
 				if inst.BackgroundTransparency <= 0.5 then
-					inst.BackgroundColor3 = getgenv().UIColor["Dropdown Selected Color"]
+					inst.BackgroundColor3 = getgenv().UIColor["Background 2 Color"] or getgenv().UIColor["Background 1 Color"]
 				else
 					inst.BackgroundColor3 = getgenv().UIColor["Background 1 Color"]
 				end
@@ -2811,7 +2821,9 @@ function Library:CreateWindow(Setting)
 				end
 
 				local function selectedItemColor()
-					return getgenv().UIColor["Dropdown Selected Color"]
+					-- Dùng nền phụ của theme đang hoạt động để tránh màu xanh cố định
+					-- còn sót lại khi chuyển từ theme này về theme khác.
+					return getgenv().UIColor["Background 2 Color"] or getgenv().UIColor["Background 1 Color"]
 				end
 
 				local function setTitle(valueText)
