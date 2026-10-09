@@ -782,6 +782,8 @@ function Library:CreateWindow(Setting)
     local TabSwitchers = {}   -- [tên tab] = hàm chuyển sang tab đó
     local TabOrder = {}       -- thứ tự tab
     local CurrentTabName = nil
+    local TabBeforeSearch = nil  -- tab đang mở trước khi bắt đầu search (để quay lại khi xoá search)
+    local AutoSwitching = false  -- true khi search tự chuyển tab (phân biệt với người dùng bấm tab)
     
     -- GlobalSearch là local và tạo lại cho mỗi window
     -- (trước đây là global nên chạy lại script sẽ search nhầm vào UI cũ đã bị xoá)
@@ -803,7 +805,21 @@ function Library:CreateWindow(Setting)
                         tab.Visible = true
                     end
                 end
+
+                -- Xoá search => quay lại tab đang mở trước khi search
+                local target = TabBeforeSearch
+                TabBeforeSearch = nil
+                if target and target ~= CurrentTabName and TabSwitchers[target] then
+                    AutoSwitching = true
+                    TabSwitchers[target]()
+                    AutoSwitching = false
+                end
                 return
+            end
+
+            -- Bắt đầu search: nhớ tab hiện tại
+            if TabBeforeSearch == nil then
+                TabBeforeSearch = CurrentTabName
             end
             
             -- Ẩn tất cả trước
@@ -905,7 +921,9 @@ function Library:CreateWindow(Setting)
             if next(foundTabs) and not foundTabs[CurrentTabName] then
                 for _, tabName in ipairs(TabOrder) do
                     if foundTabs[tabName] and TabSwitchers[tabName] then
+                        AutoSwitching = true
                         TabSwitchers[tabName]()
+                        AutoSwitching = false
                         break
                     end
                 end
@@ -1185,6 +1203,10 @@ function Library:CreateWindow(Setting)
 
 		local function SwitchPage()
 			CurrentTabName = Page_Name
+			if not AutoSwitching then
+				-- Người dùng tự bấm tab trong lúc đang search => giữ tab đó khi xoá search
+				TabBeforeSearch = nil
+			end
 			if tostring(UIPage.CurrentPage) == PageContainer.Name then 
 				return
 			end
