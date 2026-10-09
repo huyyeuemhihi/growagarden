@@ -329,6 +329,347 @@ Library_Function.Gui.Parent = game:GetService('CoreGui')
 Library_Function.NotiGui.Parent = game:GetService('CoreGui')
 Library_Function.HideGui.Parent = game:GetService('CoreGui')
 
+----------------------------------------------------------------
+-- THEME SYSTEM
+-- Library.SetTheme("Midnight")      : đổi theme ngay lập tức (UI đang mở cập nhật luôn)
+-- Library.GetTheme()                : tên theme hiện tại
+-- Library.GetThemes()               : danh sách tên theme
+-- Library.AddTheme(name, {Bg, Bg3, Accent, Text}) : thêm theme tuỳ chỉnh
+-- CreateWindow({ Theme = "Midnight" }) : chọn theme ngay khi tạo window
+--
+-- Cách hoạt động: mỗi màu mặc định của UI được "dịch" sang màu của theme theo vai trò
+-- (nền tối / màu nhấn / chữ). Đổi theme dựa trên màu hiện tại của từng object nên
+-- trạng thái (toggle bật/tắt, hover...) không bị reset.
+----------------------------------------------------------------
+local DEFAULT_PALETTE = {
+	{0,0,0}, {18,18,22}, {27,27,27}, {27,42,53}, {28,28,34}, {30,30,30}, {38,38,42},
+	{38,38,46}, {42,42,42}, {48,48,56}, {60,60,60}, {105,105,105}, {163,162,165},
+	{170,170,160}, {175,175,175}, {185,185,185}, {200,200,200}, {220,220,210},
+	{230,230,230}, {235,235,230}, {235,235,235}, {240,240,230}, {255,255,255},
+}
+
+local DefaultUIColor = {}
+for k, v in pairs(getgenv().UIColor) do
+	DefaultUIColor[k] = v
+end
+
+local Themes, ThemeOrder = {}, {}
+local CurrentTheme = "Default"
+local InverseCache = {}
+
+local function colorKey(c)
+	return string.format("%d,%d,%d",
+		math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+
+local function luma(c)
+	return (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) * 255
+end
+
+local function mix(a, b, t)
+	return Color3.new(
+		math.clamp(a.R + (b.R - a.R) * t, 0, 1),
+		math.clamp(a.G + (b.G - a.G) * t, 0, 1),
+		math.clamp(a.B + (b.B - a.B) * t, 0, 1)
+	)
+end
+
+local DefaultSet = {}
+for _, rgb in ipairs(DEFAULT_PALETTE) do
+	local c = Color3.fromRGB(rgb[1], rgb[2], rgb[3])
+	DefaultSet[colorKey(c)] = c
+end
+for _, v in pairs(DefaultUIColor) do
+	if typeof(v) == "Color3" then
+		DefaultSet[colorKey(v)] = v
+	end
+end
+
+local function addTheme(name, def)
+	name = tostring(name or "")
+	if name == "" or name == "Default" or type(def) ~= "table" then
+		return false
+	end
+	local theme = {
+		Name = name,
+		Bg = def.Bg or Color3.fromRGB(18, 18, 22),
+		Accent = def.Accent or Color3.fromRGB(235, 235, 235),
+		Text = def.Text or Color3.fromRGB(235, 235, 230),
+	}
+	theme.Bg3 = def.Bg3 or mix(theme.Bg, Color3.new(1, 1, 1), 0.17)
+	if not Themes[name] then
+		table.insert(ThemeOrder, name)
+	end
+	Themes[name] = theme
+	InverseCache[name] = nil
+	return true
+end
+
+-- Dịch 1 màu mặc định sang màu của theme
+-- role: "bg" (nền/nhấn/icon) hoặc "text" (chữ)
+local function transform(theme, c, role)
+	local l = luma(c)
+	if l < 12 then
+		return c -- đen thuần (đổ bóng, viền) giữ nguyên
+	end
+	if l < 130 then
+		-- nhóm nền tối: nội suy giữa Bg (tối nhất) và Bg3 (sáng nhất của nhóm nền)
+		local k = math.clamp((l - 18) / 42, 0, 2.2)
+		return mix(theme.Bg, theme.Bg3, k)
+	end
+	if role == "text" then
+		local t = math.clamp((235 - l) / 75, 0, 1) * 0.55
+		return mix(theme.Text, theme.Bg, t)
+	end
+	local t = math.clamp((255 - l) / 95, 0, 1) * 0.6
+	return mix(theme.Accent, theme.Bg, t)
+end
+
+local function getInverse(name)
+	local inv = InverseCache[name]
+	if not inv then
+		inv = { bg = {}, text = {} }
+		local theme = Themes[name]
+		for _, d in pairs(DefaultSet) do
+			for _, role in ipairs({ "bg", "text" }) do
+				local k = colorKey(transform(theme, d, role))
+				if inv[role][k] == nil then
+					inv[role][k] = d
+				end
+			end
+		end
+		InverseCache[name] = inv
+	end
+	return inv
+end
+
+-- Tìm màu mặc định tương ứng với màu hiện tại (nil nếu là màu lạ => giữ nguyên)
+local function resolveColor(c, role, fromName, fresh)
+	local k = colorKey(c)
+	if fresh then
+		-- object mới tạo: màu mặc định chưa được áp theme
+		if fromName ~= "Default" and getInverse(fromName)[role][k] then
+			return nil -- đã là màu của theme rồi
+		end
+		return DefaultSet[k]
+	end
+	if fromName == "Default" then
+		return DefaultSet[k]
+	end
+	return getInverse(fromName)[role][k]
+end
+
+local function themed(d, role, toName)
+	if toName == "Default" then
+		return d
+	end
+	return transform(Themes[toName], d, role)
+end
+
+local function setColor(inst, prop, role, fromName, toName, fresh)
+	local cur = inst[prop]
+	if typeof(cur) ~= "Color3" then
+		return
+	end
+	local d = resolveColor(cur, role, fromName, fresh)
+	if d then
+		inst[prop] = themed(d, role, toName)
+	end
+end
+
+local function rebuildButtonGradient(inst)
+	local base = getgenv().UIColor["Button Color"]
+	inst.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, base),
+		ColorSequenceKeypoint.new(1, mix(base, Color3.new(0, 0, 0), 0.28))
+	}
+end
+
+local function themeInstance(inst, fromName, toName, fresh)
+	if inst:IsA("GuiObject") then
+		setColor(inst, "BackgroundColor3", "bg", fromName, toName, fresh)
+		if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+			setColor(inst, "TextColor3", "text", fromName, toName, fresh)
+			if inst:IsA("TextBox") then
+				setColor(inst, "PlaceholderColor3", "text", fromName, toName, fresh)
+			end
+		end
+		if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+			setColor(inst, "ImageColor3", "bg", fromName, toName, fresh)
+		end
+		if inst:IsA("ScrollingFrame") then
+			setColor(inst, "ScrollBarImageColor3", "bg", fromName, toName, fresh)
+		end
+	elseif inst:IsA("UIStroke") then
+		setColor(inst, "Color", "bg", fromName, toName, fresh)
+	elseif inst:IsA("UIGradient") then
+		if inst.Name == "ThemeButtonGradient" then
+			rebuildButtonGradient(inst)
+		elseif inst.Name ~= "NoTheme" then
+			local newKeypoints, changed = {}, false
+			for i, kp in ipairs(inst.Color.Keypoints) do
+				local d = resolveColor(kp.Value, "bg", fromName, fresh)
+				if d then
+					newKeypoints[i] = ColorSequenceKeypoint.new(kp.Time, themed(d, "bg", toName))
+					changed = true
+				else
+					newKeypoints[i] = kp
+				end
+			end
+			if changed then
+				inst.Color = ColorSequence.new(newKeypoints)
+			end
+		end
+	end
+end
+
+local function keyRole(k)
+	for _, hint in ipairs({ "Text", "Desc", "Placeholder", "Label" }) do
+		if string.find(k, hint, 1, true) then
+			return "text"
+		end
+	end
+	return "bg"
+end
+
+local ThemeRoots = { Library_Function.Gui, Library_Function.NotiGui, Library_Function.HideGui }
+
+local function applyTheme(toName)
+	local fromName = CurrentTheme
+	if fromName == toName then
+		return
+	end
+	-- Các tween/hover về sau đọc màu từ UIColor => cập nhật luôn
+	for k, v in pairs(DefaultUIColor) do
+		if typeof(v) == "Color3" then
+			getgenv().UIColor[k] = themed(v, keyRole(k), toName)
+		end
+	end
+	CurrentTheme = toName
+	for _, root in ipairs(ThemeRoots) do
+		for _, inst in ipairs(root:GetDescendants()) do
+			themeInstance(inst, fromName, toName, false)
+		end
+	end
+end
+
+-- Object tạo sau khi đã đổi theme (tab/control thêm muộn, thông báo...) cũng được áp theme
+local Pending, Scheduled = {}, false
+local function flushPending()
+	Scheduled = false
+	if Destroyed or CurrentTheme == "Default" then
+		table.clear(Pending)
+		return
+	end
+	for inst in pairs(Pending) do
+		if inst.Parent then
+			themeInstance(inst, CurrentTheme, CurrentTheme, true)
+		end
+	end
+	table.clear(Pending)
+end
+
+for _, root in ipairs(ThemeRoots) do
+	root.DescendantAdded:Connect(function(inst)
+		if CurrentTheme == "Default" then
+			return
+		end
+		Pending[inst] = true
+		if not Scheduled then
+			Scheduled = true
+			task.defer(flushPending) -- chờ code tạo control chạy xong rồi mới áp màu
+		end
+	end)
+end
+
+local function findThemeName(name)
+	name = tostring(name or "")
+	if name:lower() == "default" then
+		return "Default"
+	end
+	if Themes[name] then
+		return name
+	end
+	for _, n in ipairs(ThemeOrder) do
+		if n:lower() == name:lower() then
+			return n
+		end
+	end
+	return nil
+end
+
+-- Hỗ trợ cả Library.SetTheme("x") lẫn Library:SetTheme("x")
+Library.SetTheme = function(a, b)
+	local name = findThemeName(a == Library and b or a)
+	if not name then
+		return false
+	end
+	applyTheme(name)
+	getgenv().DwacTheme = name
+	return true
+end
+
+Library.GetTheme = function()
+	return CurrentTheme
+end
+
+Library.GetThemes = function()
+	local list = { "Default" }
+	for _, n in ipairs(ThemeOrder) do
+		table.insert(list, n)
+	end
+	return list
+end
+
+Library.AddTheme = function(a, b, c)
+	if a == Library then
+		return addTheme(b, c)
+	end
+	return addTheme(a, b)
+end
+
+addTheme("Midnight", {
+	Bg = Color3.fromRGB(14, 18, 30),
+	Accent = Color3.fromRGB(88, 160, 255),
+	Text = Color3.fromRGB(225, 236, 252),
+})
+addTheme("Amethyst", {
+	Bg = Color3.fromRGB(20, 14, 30),
+	Accent = Color3.fromRGB(176, 124, 255),
+	Text = Color3.fromRGB(238, 230, 252),
+})
+addTheme("Rose", {
+	Bg = Color3.fromRGB(28, 14, 20),
+	Accent = Color3.fromRGB(255, 112, 150),
+	Text = Color3.fromRGB(252, 232, 238),
+})
+addTheme("Emerald", {
+	Bg = Color3.fromRGB(12, 24, 19),
+	Accent = Color3.fromRGB(72, 214, 148),
+	Text = Color3.fromRGB(224, 246, 236),
+})
+addTheme("Sunset", {
+	Bg = Color3.fromRGB(28, 18, 13),
+	Accent = Color3.fromRGB(255, 148, 64),
+	Text = Color3.fromRGB(252, 238, 226),
+})
+addTheme("Crimson", {
+	Bg = Color3.fromRGB(26, 12, 14),
+	Accent = Color3.fromRGB(235, 64, 76),
+	Text = Color3.fromRGB(250, 230, 230),
+})
+addTheme("Cyber", {
+	Bg = Color3.fromRGB(10, 10, 16),
+	Accent = Color3.fromRGB(0, 240, 190),
+	Text = Color3.fromRGB(210, 255, 245),
+})
+addTheme("Light", {
+	Bg = Color3.fromRGB(246, 247, 250),
+	Bg3 = Color3.fromRGB(206, 210, 220),
+	Accent = Color3.fromRGB(40, 100, 220),
+	Text = Color3.fromRGB(28, 32, 44),
+})
+
 function Library_Function.Getcolor(color)
 	return {
 		math.floor(color.r * 255),
@@ -564,6 +905,7 @@ function Library:CreateWindow(Setting)
 	uistr.Color = Color3.fromRGB(105, 105, 105);
 
 	local uigradient = Instance.new("UIGradient", MainContainer);
+	uigradient.Name = "NoTheme" -- gradient đổ bóng, không đổi theo theme
 	uigradient.Color = ColorSequence.new{
 		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
 		ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 200, 200))
@@ -777,9 +1119,18 @@ function Library:CreateWindow(Setting)
 
     -- Thêm biến để lưu thông tin section
     local sectionInfo = {}
+
+    -- Quản lý tab để search tự nhảy sang tab có kết quả
+    local TabSwitchers = {}   -- [tên tab] = hàm chuyển sang tab đó
+    local TabOrder = {}       -- thứ tự tab
+    local CurrentTabName = nil
+    local TabBeforeSearch = nil  -- tab đang mở trước khi bắt đầu search (để quay lại khi xoá search)
+    local AutoSwitching = false  -- true khi search tự chuyển tab (phân biệt với người dùng bấm tab)
     
-    -- Tạo hàm GlobalSearch nếu chưa tồn tại
-    if not GlobalSearch then
+    -- GlobalSearch là local và tạo lại cho mỗi window
+    -- (trước đây là global nên chạy lại script sẽ search nhầm vào UI cũ đã bị xoá)
+    local GlobalSearch
+    do
         GlobalSearch = function(searchText)
             searchText = string.lower(searchText)
             
@@ -796,7 +1147,21 @@ function Library:CreateWindow(Setting)
                         tab.Visible = true
                     end
                 end
+
+                -- Xoá search => quay lại tab đang mở trước khi search
+                local target = TabBeforeSearch
+                TabBeforeSearch = nil
+                if target and target ~= CurrentTabName and TabSwitchers[target] then
+                    AutoSwitching = true
+                    TabSwitchers[target]()
+                    AutoSwitching = false
+                end
                 return
+            end
+
+            -- Bắt đầu search: nhớ tab hiện tại
+            if TabBeforeSearch == nil then
+                TabBeforeSearch = CurrentTabName
             end
             
             -- Ẩn tất cả trước
@@ -885,11 +1250,23 @@ function Library:CreateWindow(Setting)
                 end
             end
             
-            -- Hiển thị các tab có kết quả
+            -- Hiển thị các tab có kết quả (so khớp đúng tên tab)
             for tabName, _ in pairs(foundTabs) do
                 for _, tab in pairs(ControlList:GetChildren()) do
-                    if not tab:IsA('UIListLayout') and string.find(tab.Name, tabName, 1, true) then
+                    if not tab:IsA('UIListLayout') and tab.Name == (tabName .. "_Control") then
                         tab.Visible = true
+                    end
+                end
+            end
+
+            -- Tab đang mở không có kết quả => tự nhảy sang tab đầu tiên có kết quả
+            if next(foundTabs) and not foundTabs[CurrentTabName] then
+                for _, tabName in ipairs(TabOrder) do
+                    if foundTabs[tabName] and TabSwitchers[tabName] then
+                        AutoSwitching = true
+                        TabSwitchers[tabName]()
+                        AutoSwitching = false
+                        break
                     end
                 end
             end
@@ -1166,7 +1543,12 @@ function Library:CreateWindow(Setting)
 			end
 		end
 
-		PageButton.MouseButton1Click:Connect(function()
+		local function SwitchPage()
+			CurrentTabName = Page_Name
+			if not AutoSwitching then
+				-- Người dùng tự bấm tab trong lúc đang search => giữ tab đó khi xoá search
+				TabBeforeSearch = nil
+			end
 			if tostring(UIPage.CurrentPage) == PageContainer.Name then 
 				return
 			end
@@ -1189,7 +1571,14 @@ function Library:CreateWindow(Setting)
 					end
 				end
 			end
-		end)
+		end
+
+		TabSwitchers[Page_Name] = SwitchPage
+		table.insert(TabOrder, Page_Name)
+		if not CurrentTabName then
+			CurrentTabName = Page_Name
+		end
+		PageButton.MouseButton1Click:Connect(SwitchPage)
 
 		local pageFunction = {}
 
@@ -1584,6 +1973,7 @@ function Library:CreateWindow(Setting)
              UICorner_3.Parent = ClickArea_1
              UICorner_3.CornerRadius = UDim.new(0,12)
              
+             UIGradient_1.Name = "ThemeButtonGradient" -- theme sẽ dựng lại gradient này từ "Button Color"
              UIGradient_1.Parent = ClickArea_1
              do
                  local base = getgenv().UIColor["Button Color"]
@@ -3569,6 +3959,12 @@ end
         end
 		return pagefunc
         end
+
+	-- Theme: ưu tiên Setting.Theme, nếu không có thì dùng theme đã chọn lần chạy trước
+	local initialTheme = Setting.Theme or getgenv().DwacTheme
+	if initialTheme then
+		Library.SetTheme(initialTheme)
+	end
 
 	return Main_Function
 end
