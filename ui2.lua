@@ -24,8 +24,6 @@ local T1UIColor = {
 	["Text Color"] = Color3.fromRGB(235, 235, 230),
 	["Placeholder Text Color"] = Color3.fromRGB(170, 170, 160),
 	["Title Text Color"] = Color3.fromRGB(235, 235, 235),
-	["Window Title Color"] = Color3.fromRGB(235, 235, 235),
-	["Window Description Color"] = Color3.fromRGB(235, 235, 230),
 	["Background Main Color"] = Color3.fromRGB(18, 18, 22),
 	["Background 1 Color"] = Color3.fromRGB(28, 28, 34),
 	["Background 1 Transparency"] = 0.1,
@@ -35,8 +33,8 @@ local T1UIColor = {
 	["Page Selected Color"] = Color3.fromRGB(235, 235, 235),
 	["Section Text Color"] = Color3.fromRGB(220, 220, 210),
 	["Section Underline Color"] = Color3.fromRGB(235, 235, 235),
-	["Toggle Border Color"] = Color3.fromRGB(235, 235, 235),
-	["Toggle Checked Color"] = Color3.fromRGB(230, 230, 230),
+	["Toggle Border Color"] = Color3.fromRGB(255, 255, 255),
+	["Toggle Checked Color"] = Color3.fromRGB(255, 255, 255),
 	["Toggle Desc Color"] = Color3.fromRGB(185, 185, 185),
 	["Button Color"] = Color3.fromRGB(235, 235, 235),
 	["Label Color"] = Color3.fromRGB(38, 38, 42),
@@ -468,15 +466,27 @@ local function themed(d, role, toName)
 	return transform(Themes[toName], d, role)
 end
 
+-- Lưu màu gốc theo từng instance/property để chuyển theme A -> B -> A
+-- không phải suy ngược từ màu đã bị biến đổi (dễ sai khi nhiều màu trùng nhau).
+local ThemeBaseColors = setmetatable({}, { __mode = "k" })
 local function setColor(inst, prop, role, fromName, toName, fresh)
 	local cur = inst[prop]
-	if typeof(cur) ~= "Color3" then
-		return
+	if typeof(cur) ~= "Color3" then return end
+	local props = ThemeBaseColors[inst]
+	if not props then
+		props = {}
+		ThemeBaseColors[inst] = props
 	end
-	local d = resolveColor(cur, role, fromName, fresh)
-	if d then
-		inst[prop] = themed(d, role, toName)
+	local base = props[prop]
+	if not base then
+		base = resolveColor(cur, role, fromName, fresh)
+		if not base then
+			-- Màu lạ/được set riêng: giữ màu hiện tại, không tự ý đổi.
+			return
+		end
+		props[prop] = base
 	end
+	inst[prop] = themed(base, role, toName)
 end
 
 local function rebuildButtonGradient(inst)
@@ -530,7 +540,7 @@ local function themeInstance(inst, fromName, toName, fresh)
 end
 
 local function keyRole(k)
-	for _, hint in ipairs({ "Text", "Desc", "Placeholder", "Label", "Window Title", "Window Description" }) do
+	for _, hint in ipairs({ "Text", "Desc", "Placeholder", "Label" }) do
 		if string.find(k, hint, 1, true) then
 			return "text"
 		end
@@ -552,18 +562,24 @@ local function applyTheme(toName)
 			if k ~= "Toggle Border Color" and k ~= "Toggle Checked Color" then
 				getgenv().UIColor[k] = themed(v, keyRole(k), toName)
 			else
-				getgenv().UIColor[k] = v
+				getgenv().UIColor[k] = Color3.fromRGB(255, 255, 255)
 			end
 		end
 	end
 	CurrentTheme = toName
-	-- RichText không được themeInstance đổi màu trực tiếp.
-	if type(getgenv().DwacUpdateWindowTitleColors) == "function" then
-		pcall(getgenv().DwacUpdateWindowTitleColors)
-	end
 	for _, root in ipairs(ThemeRoots) do
 		for _, inst in ipairs(root:GetDescendants()) do
 			themeInstance(inst, fromName, toName, false)
+		end
+	end
+	-- Cố định màu toggle bật/tắt là trắng, độc lập với theme.
+	for _, root in ipairs(ThemeRoots) do
+		for _, inst in ipairs(root:GetDescendants()) do
+			if inst.Name == "checkbox" and inst:IsA("ImageLabel") then
+				inst.ImageColor3 = Color3.fromRGB(255, 255, 255)
+			elseif inst.Name == "check" and inst:IsA("Frame") then
+				inst.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			end
 		end
 	end
 	-- Dropdown item màu theo theme hiện tại, không lấy màu đã bị biến đổi từ theme trước.
@@ -1002,19 +1018,11 @@ function Library:CreateWindow(Setting)
 	TextLabelMain.TextColor3 = getgenv().UIColor["GUI Text Color"]
 
 	local function updateWindowTitleColors()
-		local titleRGB = Library_Function.Getcolor(getgenv().UIColor["Window Title Color"] or getgenv().UIColor["Title Text Color"])
-		local descRGB = Library_Function.Getcolor(getgenv().UIColor["Window Description Color"] or getgenv().UIColor["GUI Text Color"])
-		local titleColor = string.format("%d,%d,%d", titleRGB[1], titleRGB[2], titleRGB[3])
-		local descColor = string.format("%d,%d,%d", descRGB[1], descRGB[2], descRGB[3])
-		local safeTitle = tostring(TitleNameMain or "Dwac Hub")
-		local safeDesc = tostring(getgenv().MainDesc or "")
-		-- Escape RichText special characters so titles/descriptions cannot break the markup.
-		safeTitle = safeTitle:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-		safeDesc = safeDesc:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-		TextLabelMain.Text = '<font color="rgb(' .. titleColor .. ')">' .. safeTitle .. '</font> <font color="rgb(' .. descColor .. ')">' .. safeDesc .. '</font>'
+		-- Giữ màu title/description theo màu chữ UI chung, không có màu riêng.
+		TextLabelMain.Text = tostring(TitleNameMain or "Dwac Hub") .. " " .. tostring(getgenv().MainDesc or "")
+		TextLabelMain.TextColor3 = getgenv().UIColor["GUI Text Color"]
 	end
 	updateWindowTitleColors()
-	getgenv().DwacUpdateWindowTitleColors = updateWindowTitleColors
 
 	PageControl.Name = "Background1"
 	PageControl.Parent = Concacmain
