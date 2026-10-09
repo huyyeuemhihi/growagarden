@@ -212,10 +212,10 @@ btnHideFrame.Name = "dut dit"
 btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 btnHideFrame.BackgroundTransparency = getgenv().UIToggled and 0 or .25
 btnHideFrame.Name = "dut dit"
-imgHide.Name = "imgHide"
-imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
 
 local imgHide = Instance.new('ImageLabel', btnHide)
+imgHide.Name = "imgHide"
+imgHide.ImageColor3 = Color3.fromRGB(255, 255, 255)
 imgHide.AnchorPoint = Vector2.new(0, 0)
 imgHide.Image = getgenv().UIColor["Logo Image"]
 imgHide.BackgroundTransparency = 1
