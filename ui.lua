@@ -699,7 +699,7 @@ function Library:CreateWindow(Setting)
 	UIPage.EasingDirection = Enum.EasingDirection.InOut
 	UIPage.EasingStyle = Enum.EasingStyle.Quart
 	UIPage.Padding = UDim.new(0, 10)
-	UIPage.TweenTime = getgenv().UIColor["Tween Animation 1 Speed"]
+	UIPage.TweenTime = math.clamp(tonumber(getgenv().UIColor["Tween Animation 1 Speed"]) or 0.2, 0, 0.25)
 
 	UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 		ControlList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 5)
@@ -1114,13 +1114,9 @@ function Library:CreateWindow(Setting)
 				return
 			end
 
-			for i, v in pairs(MainPage:GetChildren()) do
-				if not (v:IsA('UIPageLayout')) and not (v:IsA('UICorner')) then
-					v.Visible = false
-				end
-			end
-
-			PageContainer.Visible = true 
+			-- Let UIPageLayout manage page visibility/positioning itself.
+			-- Manually hiding all pages before JumpTo can cause a one-frame flash.
+			PageContainer.Visible = true
 			UIPage:JumpTo(PageContainer)
 
 			for i, v in next, ControlList:GetChildren() do
@@ -2067,8 +2063,9 @@ function Library:CreateWindow(Setting)
                         end
                         
                         if dragging and dragInput then
-                            local barWidth = math.clamp(dragInput.Position.X - Bar.AbsolutePosition.X, 0, SliderBar.AbsoluteSize.X)
-                            local percentage = barWidth / SliderBar.AbsoluteSize.X
+                            local trackWidth = math.max(SliderBar.AbsoluteSize.X, 1)
+                            local percentage = math.clamp((dragInput.Position.X - SliderBar.AbsolutePosition.X) / trackWidth, 0, 1)
+                            local barWidth = percentage * trackWidth
                             local value = minValue + (maxValue - minValue) * percentage
                             
                             if Rounding then
@@ -2280,6 +2277,24 @@ function Library:CreateWindow(Setting)
 				DropdownScroll.TopImage = "rbxasset://textures/ui/Scroll/scroll-middle.png"
 				DropdownScroll.ScrollingEnabled = true
 				DropdownScroll.VerticalScrollBarInset = Enum.ScrollBarInset.Always
+				DropdownScroll.ScrollBarImageTransparency = 0.45
+				local scrollFadeTween
+				local function showDropdownScrollBar()
+					if scrollFadeTween then scrollFadeTween:Cancel() end
+					DropdownScroll.ScrollBarImageTransparency = 0.15
+				end
+				local function fadeDropdownScrollBar()
+					if scrollFadeTween then scrollFadeTween:Cancel() end
+					scrollFadeTween = TweenService:Create(
+						DropdownScroll,
+						TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ScrollBarImageTransparency = 0.55}
+					)
+					scrollFadeTween:Play()
+				end
+				DropdownScroll.MouseEnter:Connect(showDropdownScrollBar)
+				DropdownScroll.MouseLeave:Connect(fadeDropdownScrollBar)
+				DropdownScroll:GetPropertyChangedSignal("CanvasPosition"):Connect(showDropdownScrollBar)
 				ScrollContainer.Name = "ScrollContainer"
 				ScrollContainer.Parent = DropdownScroll
 				ScrollContainer.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
@@ -2653,11 +2668,16 @@ function Library:CreateWindow(Setting)
 										dragging = true
 									end
 									if dragging and dragInput then
-										local value = Precise and  tonumber(string.format("%.1f", (((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))) or math.floor((((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))
+										local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+										local rawValue = tonumber(minValue) + (tonumber(maxValue) - tonumber(minValue)) * ratio
+										local value = Precise and tonumber(string.format("%.1f", rawValue)) or math.floor(rawValue + 0.5)
 										pcall(function()
 											callBackAndSetText(value)
 										end)
-										Bar.Size = UDim2.new(0, math.clamp(dragInput.Position.X - Bar.AbsolutePosition.X, 0, SizeChia), 0, 6)
+										local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+										Bar.Size = UDim2.new(ratio, 0, 0, 6)
 									end
 								end)
 							else
@@ -2707,11 +2727,16 @@ function Library:CreateWindow(Setting)
 										dragging = true
 									end
 									if dragging and dragInput then
-										local value = Precise and  tonumber(string.format("%.1f", (((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))) or math.floor((((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))
+										local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+										local rawValue = tonumber(minValue) + (tonumber(maxValue) - tonumber(minValue)) * ratio
+										local value = Precise and tonumber(string.format("%.1f", rawValue)) or math.floor(rawValue + 0.5)
 										pcall(function()
 											callBackAndSetText(value)
 										end)
-										Bar.Size = UDim2.new(0, math.clamp(dragInput.Position.X - Bar.AbsolutePosition.X, 0, SizeChia), 0, 6)
+										local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+										Bar.Size = UDim2.new(ratio, 0, 0, 6)
 									end
 								end)
 							end
@@ -2898,10 +2923,10 @@ function Library:CreateWindow(Setting)
 					local listsize = isbusy and UDim2.new(1, 0, 0, 170) or UDim2.new(1, 0, 0, 0)
 					local mainsize = isbusy and UDim2.new(1, 0, 0, 200) or UDim2.new(1, 0, 0, 25)
 					local DropCRotation = isbusy and 90 or 0
-					TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
+					TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"], Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size = listsize
 					}):Play()
-					TweenService:Create(DropdownFrame, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
+					TweenService:Create(DropdownFrame, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"], Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size = mainsize
 					}):Play()
 					TweenService:Create(ImgDrop, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
@@ -2929,10 +2954,10 @@ function Library:CreateWindow(Setting)
 					local listsize = isbusy and UDim2.new(1, 0, 0, 170) or UDim2.new(1, 0, 0, 0)
 					local mainsize = isbusy and UDim2.new(1, 0, 0, 200) or UDim2.new(1, 0, 0, 25)
 					local DropCRotation = isbusy and 90 or 0
-					TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
+					TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"], Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size = listsize
 					}):Play()
-					TweenService:Create(DropdownFrame, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
+					TweenService:Create(DropdownFrame, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"], Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size = mainsize
 					}):Play()
 					TweenService:Create(ImgDrop, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
@@ -3498,11 +3523,17 @@ end
 						dragging = true
 					end
 					if dragging and dragInput then
-						local value = Setting.Rouding and  tonumber(string.format("%.".. Setting.Rouding or 1 .."f", (((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))) or math.floor((((tonumber(maxValue) - tonumber(minValue)) / SizeChia) * Bar.AbsoluteSize.X) + tonumber(minValue))
+						local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+					local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+					local rawValue = tonumber(minValue) + (tonumber(maxValue) - tonumber(minValue)) * ratio
+					local decimals = math.clamp(tonumber(Setting.Rouding) or 0, 0, 4)
+					local value = decimals > 0 and tonumber(string.format("%." .. decimals .. "f", rawValue)) or math.floor(rawValue + 0.5)
 						pcall(function()
 							callBackAndSetText(value)
 						end)
-						Bar.Size = UDim2.new(0, math.clamp(dragInput.Position.X - Bar.AbsolutePosition.X, 0, SizeChia), 0, 6)
+						local trackWidth = math.max(SliderBG.AbsoluteSize.X, 1)
+										local ratio = math.clamp((dragInput.Position.X - SliderBG.AbsolutePosition.X) / trackWidth, 0, 1)
+										Bar.Size = UDim2.new(ratio, 0, 0, 6)
 					end
 				end)
 				local function GetSliderValue(Value)
