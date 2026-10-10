@@ -2349,8 +2349,10 @@ function Library:CreateWindow(Setting)
                 DropdownButton.MouseButton1Click:Connect(function()
                     isOpen = not isOpen
                     
-                    local listsize = isOpen and UDim2.new(1, 0, 0, 200) or UDim2.new(1, 0, 0, 0)
-                    local mainsize = isOpen and UDim2.new(1, 0, 0, 230) or UDim2.new(1, 0, 0, 25)
+                    -- Chiều cao theo nội dung thật (trước đây cố định 200/230 nên bị thừa khoảng trống)
+                    local contentHeight = math.min(InternalList.AbsoluteContentSize.Y + 10, 300)
+                    local listsize = isOpen and UDim2.new(1, 0, 0, contentHeight) or UDim2.new(1, 0, 0, 0)
+                    local mainsize = isOpen and UDim2.new(1, 0, 0, contentHeight + 25) or UDim2.new(1, 0, 0, 25)
                     local DropCRotation = isOpen and 90 or 0
                     
                     TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
@@ -2365,7 +2367,7 @@ function Library:CreateWindow(Setting)
                 end)
                 
                 ScrollContainerList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                    DropdownScroll.CanvasSize = UDim2.new(0, 0, 0, 10 + ScrollContainerList.AbsoluteContentSize.Y + 5)
+                    DropdownScroll.CanvasSize = UDim2.new(0, 0, 0, 5 + ScrollContainerList.AbsoluteContentSize.Y + 5)
                 end)
                 
                 InternalList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
@@ -2383,8 +2385,33 @@ function Library:CreateWindow(Setting)
                     end
                 end)
                 
-                -- Tạo dropdown section functions (CHỈ CÓ SLIDER)
+                -- Tạo dropdown section functions
                 local dropdownSectionFunction = {}
+                
+                -- Dùng lại control của section thường (Label, Button, Toggle, Input, KeyBind, Dropdown):
+                -- tạo bằng hàm gốc rồi chuyển control mới vào bên trong dropdown section.
+                -- Control vẫn được đăng ký vào search như bình thường.
+                local function createInside(methodName, ...)
+                    local before = {}
+                    for _, child in ipairs(Section:GetChildren()) do
+                        before[child] = true
+                    end
+                    
+                    local result = sectionFunction[methodName](sectionFunction, ...)
+                    
+                    for _, child in ipairs(Section:GetChildren()) do
+                        if not before[child] then
+                            child.Parent = InternalSection
+                        end
+                    end
+                    return result
+                end
+                
+                for _, methodName in ipairs({ "AddLabel", "AddButton", "AddToggle", "AddInput", "AddKeyBind", "AddDropdown" }) do
+                    dropdownSectionFunction[methodName] = function(self, ...)
+                        return createInside(methodName, ...)
+                    end
+                end
                 
                 -- HÀM TẠO SLIDER (RỘNG HƠN, SÁT VIỀN)
                 function dropdownSectionFunction:AddSlider(Setting)
