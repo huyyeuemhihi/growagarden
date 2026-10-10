@@ -13,6 +13,11 @@ local IsMobile = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TouchGui') ~
 -- Hệ số tốc độ animation: mobile chạy nhanh hơn chút (0.7) thay vì tắt hẳn.
 -- Muốn tự chỉnh: getgenv().DwacAnimationScale = 0 (tắt) / 1 (bình thường) trước khi load UI.
 local AnimScale = tonumber(getgenv().DwacAnimationScale) or (IsMobile and 0.7 or 1)
+-- Che do nhe: bo bong do/vien chu phu de luot muot hon (mac dinh bat tren mobile)
+local DwacLite = getgenv().DwacLiteUI
+if DwacLite == nil then
+	DwacLite = IsMobile
+end
 local T1UIColor = {
 	["Border Color"] = Color3.fromRGB(235, 235, 235),
 	["Click Effect Color"] = Color3.fromRGB(230, 230, 230),
@@ -41,6 +46,7 @@ local T1UIColor = {
 	["Dropdown Icon Color"] = Color3.fromRGB(230, 230, 230),
 	["Dropdown Selected Color"] = Color3.fromRGB(235, 235, 235),
 	["Dropdown Selected Check Color"] = Color3.fromRGB(200, 200, 200),
+	["Dropdown Hover Color"] = Color3.fromRGB(255, 255, 255),
 	["Textbox Highlight Color"] = Color3.fromRGB(235, 235, 235),
 	["Box Highlight Color"] = Color3.fromRGB(235, 235, 235),
 	["Slider Line Color"] = Color3.fromRGB(235, 235, 235),
@@ -209,10 +215,12 @@ btnHideFrame.AnchorPoint = Vector2.new(0, 1)
 btnHideFrame.Size = UDim2.new(0, 50, 0, 50)
 btnHideFrame.Position = UDim2.new(0, 0, 1, 0)
 btnHideFrame.Name = "dut dit"
+btnHideFrame:SetAttribute("NoTheme", true) -- nút ẩn/hiện UI (logo) giữ nguyên màu
 btnHideFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 btnHideFrame.BackgroundTransparency = getgenv().UIToggled and 0 or .25
 
 local imgHide = Instance.new('ImageLabel', btnHide)
+imgHide:SetAttribute("NoTheme", true)
 imgHide.AnchorPoint = Vector2.new(0, 0)
 imgHide.Image = getgenv().UIColor["Logo Image"]
 imgHide.BackgroundTransparency = 1
@@ -485,7 +493,22 @@ local function rebuildButtonGradient(inst)
 	}
 end
 
+-- Object (hoặc cha của nó) có attribute NoTheme thì không đổi màu (logo, toggle bật/tắt)
+local function isExcluded(inst)
+	local p = inst
+	while p do
+		if p:GetAttribute("NoTheme") then
+			return true
+		end
+		p = p.Parent
+	end
+	return false
+end
+
 local function themeInstance(inst, fromName, toName, fresh)
+	if isExcluded(inst) then
+		return
+	end
 	if inst:IsA("GuiObject") then
 		setColor(inst, "BackgroundColor3", "bg", fromName, toName, fresh)
 		if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
@@ -532,6 +555,20 @@ local function keyRole(k)
 	return "bg"
 end
 
+-- Các control tự đăng ký hàm vẽ lại khi đổi theme (vd: dropdown tô lại item đang chọn)
+local ThemeHooks = {}
+local function runThemeHooks()
+	for _, fn in ipairs(ThemeHooks) do
+		pcall(fn)
+	end
+end
+
+-- Màu toggle giữ mặc định, không đổi theme
+local NO_THEME_KEYS = {
+	["Toggle Border Color"] = true,
+	["Toggle Checked Color"] = true,
+}
+
 local ThemeRoots = { Library_Function.Gui, Library_Function.NotiGui, Library_Function.HideGui }
 
 local function applyTheme(toName)
@@ -541,7 +578,7 @@ local function applyTheme(toName)
 	end
 	-- Các tween/hover về sau đọc màu từ UIColor => cập nhật luôn
 	for k, v in pairs(DefaultUIColor) do
-		if typeof(v) == "Color3" then
+		if typeof(v) == "Color3" and not NO_THEME_KEYS[k] then
 			getgenv().UIColor[k] = themed(v, keyRole(k), toName)
 		end
 	end
@@ -551,6 +588,25 @@ local function applyTheme(toName)
 			themeInstance(inst, fromName, toName, false)
 		end
 	end
+	runThemeHooks() -- huỷ tween đang chạy về màu cũ + vẽ lại bằng màu theme mới
+
+	-- Tween đang chạy lúc đổi theme (vd: item dropdown vừa chọn) vẫn trượt về màu CŨ
+	-- => quét lại sau khi tween kết thúc để sửa các màu còn sót.
+	task.delay(0.45, function()
+		if Destroyed or CurrentTheme ~= toName then
+			return
+		end
+		for _, root in ipairs(ThemeRoots) do
+			for _, inst in ipairs(root:GetDescendants()) do
+				if toName == "Default" then
+					themeInstance(inst, fromName, "Default", false)
+				else
+					themeInstance(inst, toName, toName, true)
+				end
+			end
+		end
+		runThemeHooks()
+	end)
 end
 
 -- Object tạo sau khi đã đổi theme (tab/control thêm muộn, thông báo...) cũng được áp theme
@@ -721,6 +777,7 @@ local libCreateNoti = function(Setting)
 	Topnoti.Size = UDim2.new(1, 0, 0, 25)
 
 	Ruafimg.Name = "Ruafimg"
+	Ruafimg:SetAttribute("NoTheme", true) -- logo giữ nguyên màu
 	Ruafimg.Parent = Topnoti
 	Ruafimg.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
 	Ruafimg.BackgroundTransparency = 1.000
@@ -952,6 +1009,7 @@ function Library:CreateWindow(Setting)
 	TopStroke.Size = UDim2.new(1, 0, 0, 1)
 	
 	Ruafimg.Name = "Ruafimg"
+	Ruafimg:SetAttribute("NoTheme", true) -- logo giữ nguyên màu
 	Ruafimg.Parent = TopMain
 	Ruafimg.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	Ruafimg.BackgroundTransparency = 1.000
@@ -1421,6 +1479,7 @@ function Library:CreateWindow(Setting)
 		PageList.ScrollBarThickness = 5
 		PageList.TopImage = "rbxasset://textures/ui/Scroll/scroll-middle.png"
 		PageList.ScrollingEnabled = true
+		PageList.ScrollingDirection = Enum.ScrollingDirection.Y
 		PageList.VerticalScrollBarInset = Enum.ScrollBarInset.Always
 
 		Pagelistlayout.Name = "Pagelistlayout"
@@ -1597,7 +1656,7 @@ function Library:CreateWindow(Setting)
 			Section.Size = UDim2.new(1, -5, 0, 30)
 			Section.BackgroundColor3 = Color3.fromRGB(48, 48, 56)
 			Section.BackgroundTransparency = 0.25
-			Section.ClipsDescendants = true
+			Section.ClipsDescendants = Toggleable and true or false
 
 			local sectionStroke = Instance.new("UIStroke", Section)
 			sectionStroke.Color = Color3.fromRGB(105, 105, 105)
@@ -1653,6 +1712,9 @@ function Library:CreateWindow(Setting)
 			LineShadow.ImageTransparency = 0.6
 			LineShadow.ScaleType = Enum.ScaleType.Slice
 			LineShadow.SliceCenter = Rect.new(24, 24, 276, 276)
+			if DwacLite then
+				LineShadow:Destroy()
+			end
 
 			UIGradient.Transparency = NumberSequence.new{
 				NumberSequenceKeypoint.new(0, 1),
@@ -1733,9 +1795,16 @@ function Library:CreateWindow(Setting)
 					TweenService:Create(visibility_off, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"] / 2), {
 						ImageTransparency = sectionIsVisible and 1 or 0
 					}):Play()
-					TweenService:Create(Section, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"] * 1.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+					Section.ClipsDescendants = true
+					local sectionTween = TweenService:Create(Section, TweenInfo.new(getgenv().UIColor["Tween Animation 1 Speed"] * 1.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 						Size =  UDim2.new(1, -5, 0, (sectionIsVisible and SizeSectionY or 30))
-					}):Play()
+					})
+					sectionTween.Completed:Connect(function()
+						if sectionIsVisible then
+							Section.ClipsDescendants = false
+						end
+					end)
+					sectionTween:Play()
 				end)
 			end
 			if SectionGap then
@@ -1799,8 +1868,10 @@ function Library:CreateWindow(Setting)
 				checkbox.Position = UDim2.new(1, -5, 0.5, 3)
 				checkbox.Size = UDim2.new(0, 25, 0, 25)
 				checkbox.Image = "rbxassetid://4552505888"
+				checkbox:SetAttribute("NoTheme", true) -- toggle bật/tắt giữ nguyên màu
 				checkbox.ImageColor3 = getgenv().UIColor["Toggle Border Color"]
 				check.Name = "check"
+				check:SetAttribute("NoTheme", true)
 				check.Parent = checkbox
 				check.AnchorPoint = Vector2.new(0.5, 0.5)
 				check.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
@@ -1959,7 +2030,7 @@ function Library:CreateWindow(Setting)
              TextColor_1.Text = Title
              TextColor_1.TextColor3 = getgenv().UIColor["GUI Text Color"]
              TextColor_1.TextSize = 14
-             TextColor_1.TextStrokeTransparency = 0.8500000238418579
+             TextColor_1.TextStrokeTransparency = DwacLite and 1 or 0.8500000238418579
              TextColor_1.TextXAlignment = Enum.TextXAlignment.Left
              
              ClickArea_1.Name = "ClickArea"
@@ -1968,7 +2039,7 @@ function Library:CreateWindow(Setting)
              ClickArea_1.BackgroundColor3 = getgenv().UIColor["Button Color"]
              ClickArea_1.Position = UDim2.new(1, -8,0.5, 0)
              ClickArea_1.Size = UDim2.new(0, 94,0, 30)
-             ClickArea_1.ClipsDescendants = true  -- THÊM DÒNG NÀY: Ngăn ripple tràn ra
+             ClickArea_1.ClipsDescendants = false -- chi bat clip trong luc ripple chay (xem MouseButton1Down)
              
              UICorner_3.Parent = ClickArea_1
              UICorner_3.CornerRadius = UDim.new(0,12)
@@ -1995,6 +2066,9 @@ function Library:CreateWindow(Setting)
              ImageLabel_1.ImageTransparency = 0.7
              ImageLabel_1.ScaleType = Enum.ScaleType.Slice
              ImageLabel_1.SliceCenter = Rect.new(24, 24, 276, 276)
+             if DwacLite then
+                 ImageLabel_1:Destroy()
+             end
              
              Frame_1.Parent = ClickArea_1
              Frame_1.AnchorPoint = Vector2.new(0.5, 0)
@@ -2036,7 +2110,10 @@ function Library:CreateWindow(Setting)
              	scaleNormal:Play()
              end)
              
+                local rippleCount = 0
                 Button_1.MouseButton1Down:Connect(function()
+                    rippleCount = rippleCount + 1
+                    ClickArea_1.ClipsDescendants = true
                     
                     -- Lấy kích thước thực tế của ClickArea
                     local w = ClickArea_1.AbsoluteSize.X
@@ -2071,6 +2148,11 @@ function Library:CreateWindow(Setting)
                     rippleTween:Play()
                     rippleTween.Completed:Connect(function()
                         ripple:Destroy()
+                        rippleCount = rippleCount - 1
+                        if rippleCount <= 0 then
+                            rippleCount = 0
+                            ClickArea_1.ClipsDescendants = false
+                        end
                     end)
                     
                     Callback()
@@ -2130,7 +2212,7 @@ function Library:CreateWindow(Setting)
                 TextColor.Text = Title
                 TextColor.TextColor3 = Color3.fromRGB(240,240,230)
                 TextColor.TextSize = 14
-                TextColor.TextStrokeTransparency = 0.8500000238418579
+                TextColor.TextStrokeTransparency = DwacLite and 1 or 0.8500000238418579
                 TextColor.TextWrapped = true
                 TextColor.TextXAlignment = Enum.TextXAlignment.Left
 				local labelFunction = {}
@@ -2294,8 +2376,10 @@ function Library:CreateWindow(Setting)
                 DropdownButton.MouseButton1Click:Connect(function()
                     isOpen = not isOpen
                     
-                    local listsize = isOpen and UDim2.new(1, 0, 0, 200) or UDim2.new(1, 0, 0, 0)
-                    local mainsize = isOpen and UDim2.new(1, 0, 0, 230) or UDim2.new(1, 0, 0, 25)
+                    -- Chiều cao theo nội dung thật (trước đây cố định 200/230 nên bị thừa khoảng trống)
+                    local contentHeight = math.min(InternalList.AbsoluteContentSize.Y + 10, 300)
+                    local listsize = isOpen and UDim2.new(1, 0, 0, contentHeight) or UDim2.new(1, 0, 0, 0)
+                    local mainsize = isOpen and UDim2.new(1, 0, 0, contentHeight + 25) or UDim2.new(1, 0, 0, 25)
                     local DropCRotation = isOpen and 90 or 0
                     
                     TweenService:Create(Dropdownlisttt, TweenInfo.new(getgenv().UIColor["Tween Animation 2 Speed"]), {
@@ -2310,7 +2394,7 @@ function Library:CreateWindow(Setting)
                 end)
                 
                 ScrollContainerList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                    DropdownScroll.CanvasSize = UDim2.new(0, 0, 0, 10 + ScrollContainerList.AbsoluteContentSize.Y + 5)
+                    DropdownScroll.CanvasSize = UDim2.new(0, 0, 0, 5 + ScrollContainerList.AbsoluteContentSize.Y + 5)
                 end)
                 
                 InternalList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
@@ -2328,8 +2412,33 @@ function Library:CreateWindow(Setting)
                     end
                 end)
                 
-                -- Tạo dropdown section functions (CHỈ CÓ SLIDER)
+                -- Tạo dropdown section functions
                 local dropdownSectionFunction = {}
+                
+                -- Dùng lại control của section thường (Label, Button, Toggle, Input, KeyBind, Dropdown):
+                -- tạo bằng hàm gốc rồi chuyển control mới vào bên trong dropdown section.
+                -- Control vẫn được đăng ký vào search như bình thường.
+                local function createInside(methodName, ...)
+                    local before = {}
+                    for _, child in ipairs(Section:GetChildren()) do
+                        before[child] = true
+                    end
+                    
+                    local result = sectionFunction[methodName](sectionFunction, ...)
+                    
+                    for _, child in ipairs(Section:GetChildren()) do
+                        if not before[child] then
+                            child.Parent = InternalSection
+                        end
+                    end
+                    return result
+                end
+                
+                for _, methodName in ipairs({ "AddLabel", "AddButton", "AddToggle", "AddInput", "AddKeyBind", "AddDropdown" }) do
+                    dropdownSectionFunction[methodName] = function(self, ...)
+                        return createInside(methodName, ...)
+                    end
+                end
                 
                 -- HÀM TẠO SLIDER (RỘNG HƠN, SÁT VIỀN)
                 function dropdownSectionFunction:AddSlider(Setting)
@@ -2855,7 +2964,7 @@ function Library:CreateWindow(Setting)
 						entry.paintTween:Cancel()
 						entry.paintTween = nil
 					end
-					local color = selected and selColor() or WHITE
+					local color = selected and selColor() or getgenv().UIColor["Dropdown Hover Color"]
 					local trans = selected and 0.5 or 1
 					local checkTrans = (Multi and selected) and 0 or 1
 					if instant or FADE_TIME <= 0 then
@@ -2880,10 +2989,19 @@ function Library:CreateWindow(Setting)
 						entry.paintTween:Cancel()
 					end
 					entry.paintTween = play(entry.bg, FADE_TIME, {
-						BackgroundColor3 = WHITE,
+						BackgroundColor3 = getgenv().UIColor["Dropdown Hover Color"],
 						BackgroundTransparency = on and 0.7 or 1,
 					})
 				end
+
+				-- Đổi theme: vẽ lại ngay trạng thái chọn của mọi item (huỷ tween còn trỏ về màu cũ)
+				table.insert(ThemeHooks, function()
+					for _, e in ipairs(entries) do
+						if e.bg then
+							paint(e, e.selected and true or false, true)
+						end
+					end
+				end)
 
 				----------------------------------------------------------------
 				-- Mở / đóng (animation cuộn xuống / cuộn lên)
