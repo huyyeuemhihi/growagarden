@@ -3,8 +3,8 @@
 	-------------------------------------------------------------------------------
 	MỚI SO VỚI v1
 	• LIQUID GLASS: thân kính tối hơi trong suốt, viền sáng chéo (rim light) xoay theo trạng thái,
-	  vệt phản chiếu phía trên, viền trong dày mỏng kiểu thấu kính, ánh màu của activity hắt lên kính,
-	  quầng sáng chạy theo ngón tay khi chạm, vệt sáng quét ngang mỗi lần đổi trạng thái, bóng đổ mềm.
+	  vệt phản chiếu phía trên, chiều sâu kính dựng bằng nhiều lớp frame (giữa tối, mép sáng mờ), ánh màu của activity hắt lên kính,
+	  quầng sáng chạy theo ngón tay khi chạm, vệt sáng quét ngang mỗi lần đổi trạng thái, bóng đổ mềm dựng bằng nhiều lớp frame nhạt (không còn vòng viền cứng).
 	• ICON DÙNG CHUNG (matched geometry): icon bay + co giãn + đổi độ bo từ compact -> banner -> expanded
 	  bằng spring, giống iOS (không còn fade rời từng icon).
 	• NỘI DUNG vào theo tầng (stagger): header trước, progress/nút sau, mỗi tầng trượt lên + scale + fade.
@@ -88,7 +88,6 @@ local M = {
 	IconBig = 44,
 	IconSmall = 22,
 	LeadW = 34, -- vùng icon mỗi bên ở trạng thái compact
-	Edge = 3, -- độ dày viền trong kiểu thấu kính
 }
 local HEADER_X = M.Margin + M.IconBig + 12
 
@@ -105,7 +104,10 @@ local RIM_ANGLE = { idle = 40, activity = 58, notify = 72, expanded = 100, hidde
 
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
-local GLASS_BASE = Color3.fromRGB(6, 6, 9)
+local GLASS_BASE = Color3.fromRGB(30, 32, 38) -- nền kính mờ đục (xám lạnh), phần giữa được tối dần bằng các lớp DEPTH
+-- Bóng + chiều sâu kính dựng bằng NHIỀU lớp frame đặc, mỗi lớp rất nhạt (thay cho UIStroke dày bị lộ vòng)
+local SHADOW_N, SHADOW_STEP, SHADOW_ALPHA = 12, 2.2, 0.03 -- 12 lớp, mỗi lớp nở thêm 2.2px, đậm 3%
+local DEPTH_N, DEPTH_STEP, DEPTH_ALPHA = 8, 2, 0.07 -- 8 lớp thu dần vào trong, mỗi lớp tối thêm 7%
 local BTN_BG = Color3.fromRGB(58, 58, 60)
 
 ----------------------------------------------------------------------
@@ -486,7 +488,7 @@ function Island.new(config)
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
 		Shadow = config.Shadow ~= false,
-		Transparency = config.Transparency or 0.1,
+		Transparency = config.Transparency or 0.12,
 	}
 	self._glass = self._cfg.Glass
 	self._conns = {}
@@ -577,20 +579,21 @@ function Island:_build()
 		ZIndex = 0,
 	}, shell)
 
-	-- Bóng đổ mềm: vài vòng stroke chồng nhau, dày dần + nhạt dần
-	for _, s in ipairs({ { 8, 0.88 }, { 18, 0.94 }, { 30, 0.972 } }) do
+	-- Bóng đổ mềm: lặp N frame đặc, lớp sau lớn hơn lớp trước một chút, mỗi lớp chỉ đậm ~3%.
+	-- Chồng lên nhau thành dải chuyển mờ mượt (không còn vòng viền cứng như UIStroke dày).
+	for i = 1, SHADOW_N do
 		local f = mk("Frame", {
-			BackgroundTransparency = 1,
+			BackgroundColor3 = BLACK,
+			BackgroundTransparency = 1 - SHADOW_ALPHA,
 			BorderSizePixel = 0,
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 0, 6),
-			Size = UDim2.fromScale(1, 1),
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 5),
+			Size = UDim2.new(1, 2 * i * SHADOW_STEP, 1, 2 * i * SHADOW_STEP),
 			ZIndex = 0,
 			Visible = self._cfg.Shadow,
 		}, shell)
 		local c = mk("UICorner", {}, f)
-		local st = mk("UIStroke", { Color = BLACK, Thickness = s[1], Transparency = s[2] }, f)
-		table.insert(self._shadows, { frame = f, corner = c, stroke = st, t = s[1] })
+		table.insert(self._shadows, { frame = f, corner = c, grow = i * SHADOW_STEP })
 	end
 
 	-- Thân đảo: CanvasGroup để nội dung bị cắt đúng theo góc bo
@@ -617,7 +620,7 @@ function Island:_build()
 		BackgroundColor3 = WHITE,
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 1),
-		ZIndex = 0,
+		ZIndex = 1,
 	}, body))
 	addGradient(sheen, 90, { { 0, 0.9 }, { 0.45, 1 }, { 0.82, 1 }, { 1, 0.955 } })
 
@@ -628,7 +631,7 @@ function Island:_build()
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 1),
-		ZIndex = 0,
+		ZIndex = 1,
 	}, body))
 	addGradient(self._tint, 0, { { 0, 0.78 }, { 0.5, 0.95 }, { 1, 1 } })
 
@@ -639,7 +642,7 @@ function Island:_build()
 		Size = UDim2.fromOffset(170, 170),
 		BackgroundTransparency = 1,
 		GroupTransparency = 1,
-		ZIndex = 0,
+		ZIndex = 1,
 	}, body))
 	for _, d in ipairs({ { 170, 0.975 }, { 118, 0.96 }, { 70, 0.95 }, { 34, 0.94 } }) do
 		local circle = mk("Frame", {
@@ -661,24 +664,27 @@ function Island:_build()
 		Position = UDim2.new(0.5, 0, 0, 1.5),
 		BackgroundColor3 = WHITE,
 		BorderSizePixel = 0,
-		ZIndex = 0,
+		ZIndex = 1,
 	}, body))
 	self._specCorner = mk("UICorner", {}, self._spec)
 	addGradient(self._spec, 90, { { 0, 0.82 }, { 0.6, 0.98 }, { 1, 1 } })
 
-	-- 5) Viền trong dày mỏng kiểu thấu kính (đậm ở hai góc chéo)
-	local edge = glassItem(mk("Frame", {
-		Name = "Edge",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, -2 * M.Edge, 1, -2 * M.Edge),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 0,
-	}, body))
-	self._edgeCorner = mk("UICorner", {}, edge)
-	local edgeStroke = mk("UIStroke", { Color = WHITE, Thickness = M.Edge, Transparency = 0 }, edge)
-	self._edgeGrad = addGradient(edgeStroke, 45, { { 0, 0.8 }, { 0.25, 0.96 }, { 0.5, 1 }, { 0.75, 0.96 }, { 1, 0.8 } })
+	-- 5) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
+	self._depth = {}
+	for i = 1, DEPTH_N do
+		local f = mk("Frame", {
+			BackgroundColor3 = BLACK,
+			BackgroundTransparency = 1 - DEPTH_ALPHA,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, -2 * i * DEPTH_STEP, 1, -2 * i * DEPTH_STEP),
+			ZIndex = 0,
+			Visible = glass,
+		}, body)
+		local c = mk("UICorner", {}, f)
+		table.insert(self._depth, { frame = f, corner = c, inset = i * DEPTH_STEP })
+	end
 
 	-- 6) Vệt sáng quét ngang khi đổi trạng thái
 	self._glint = glassItem(mk("Frame", {
@@ -700,9 +706,9 @@ function Island:_build()
 		ZIndex = 2,
 	}, shell))
 	self._rimCorner = mk("UICorner", {}, self._rim)
-	self._rimT = 1.2
+	self._rimT = 1
 	self._rimStroke = mk("UIStroke", { Color = WHITE, Thickness = self._rimT, Transparency = 0 }, self._rim)
-	self._rimGrad = addGradient(self._rimStroke, RIM_ANGLE.idle, { { 0, 0.12 }, { 0.2, 0.74 }, { 0.5, 0.93 }, { 0.8, 0.74 }, { 1, 0.12 } })
+	self._rimGrad = addGradient(self._rimStroke, RIM_ANGLE.idle, { { 0, 0.3 }, { 0.2, 0.82 }, { 0.5, 0.95 }, { 0.8, 0.82 }, { 1, 0.3 } })
 
 	-- Layer Activity (compact): chỉ còn chữ bên phải (icon là icon dùng chung)
 	local act = newLayer(body, "Activity")
@@ -754,17 +760,22 @@ function Island:_apply()
 	self._bodyCorner.CornerRadius = UDim.new(0, r)
 
 	local k = math.clamp(h / 16, 0, 1) -- viền/bóng mỏng dần khi đảo thu về 0
-	for _, s in ipairs(self._shadows) do
-		s.corner.CornerRadius = UDim.new(0, r)
-		s.stroke.Thickness = s.t * k
+	for _, sh in ipairs(self._shadows) do
+		sh.corner.CornerRadius = UDim.new(0, r + sh.grow * k)
 	end
 
 	if self._glass then
 		self._rimCorner.CornerRadius = UDim.new(0, r)
 		self._rimStroke.Thickness = self._rimT * k
-		self._edgeCorner.CornerRadius = UDim.new(0, math.max(r - M.Edge, 0))
 		self._spec.Size = UDim2.new(1, -r * 0.8, 0, h * 0.5)
 		self._specCorner.CornerRadius = UDim.new(0, math.max(r * 0.75, 2))
+	end
+	for _, d in ipairs(self._depth) do
+		local fits = self._glass and (h - 2 * d.inset) > 2 and (w - 2 * d.inset) > 2
+		d.frame.Visible = fits
+		if fits then
+			d.corner.CornerRadius = UDim.new(0, math.max(r - d.inset, 0))
+		end
 	end
 
 	local ic = self._icon
@@ -1154,7 +1165,6 @@ function Island:_glassTransition(state)
 	tween(self._glintGrad, 0.95, { Offset = Vector2.new(1, 0) }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 	local ang = RIM_ANGLE[state] or 40
 	tween(self._rimGrad, 0.9, { Rotation = ang }, Enum.EasingStyle.Quint)
-	tween(self._edgeGrad, 0.9, { Rotation = ang }, Enum.EasingStyle.Quint)
 end
 
 function Island:_render(instant)
