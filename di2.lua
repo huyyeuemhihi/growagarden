@@ -1,61 +1,50 @@
 --[[
-	DynamicIsland.lua  v3  -  Dynamic Island (iPhone 14 Pro) + Liquid Glass cho Roblox
+	DynamicIsland.lua  v4  -  Dynamic Island (iPhone 14 Pro) + Liquid Glass chân thực kiểu Night Hub
 	-------------------------------------------------------------------------------
+	MỚI Ở v4 (khớp ảnh Night Hub – kính đục mờ thật + liquid sống)
+	• Style Frosted tinh chỉnh đúng tone Night Hub: xám đục vừa, nền 3D mờ mạnh phía sau lớp kính.
+	• RealBlur mạnh hơn (NearIntensity cao, Inset chặt, Slices nhiều) → blur nền giống ảnh 2.
+	• LUÔN chạy RenderStepped (liquid loop): breathing nhẹ, rim light trôi chậm, depth pulse,
+	  glow soft – tận dụng tối đa frame để kính “sống” như liquid glass thật, không chỉ animate khi đổi state.
+	• Viền kính 5 lớp + depth 10 lớp mượt hơn; không phản chiếu cứng (giữ noreflection).
+	• Opacity/độ đục mở giống panel Night Hub (không quá trong, không đen đặc).
+
 	MỚI Ở v3 (sửa tràn viền + kính chân thực hơn)
-	• HẾT TRÀN VIỀN: bỏ bóng đổ ngoài thân (12 lớp frame nở ra ~26px chính là quầng đen lem quanh viền). Viền sáng giờ
-	  là các lớp UIStroke nằm TRONG thân (CanvasGroup cắt đúng góc bo) nên không lớp nào vượt khỏi đường bo.
-	• Vùng mờ nền thật (Part DepthOfField) thu vào trong Inset px, lát góc tính theo mép ngoài của lát -> không lòi ra ngoài góc bo.
-	• Kính thật hơn: viền 4 lớp (sắc ở mép, mờ dần vào trong, sáng chéo theo góc), vệt phản chiếu 3 lớp mép mềm,
-	  quầng sáng ngón tay 16 vòng thay cho 4 vòng (hết lộ vành đồng tâm). Tuỳ chọn Shadow đã bỏ.
+	• HẾT TRÀN VIỀN: viền sáng là UIStroke nằm TRONG thân (CanvasGroup cắt đúng góc bo).
+	• Vùng mờ nền thật thu vào Inset, lát góc không lòi ra ngoài.
+	• Kính: viền nhiều lớp, quầng ngón tay 16 vòng.
 
-	MỚI Ở v2 (so với v1)
-	• LIQUID GLASS: thân kính tối hơi trong suốt, viền sáng chéo (rim light) xoay theo trạng thái,
-	  chiều sâu kính dựng bằng nhiều lớp frame (giữa tối, mép sáng mờ), ánh màu của activity hắt lên kính,
-	  quầng sáng chạy theo ngón tay khi chạm, bóng đổ mềm dựng bằng nhiều lớp frame nhạt (không còn vòng viền cứng).
-	• ICON DÙNG CHUNG (matched geometry): icon bay + co giãn + đổi độ bo từ compact -> banner -> expanded
-	  bằng spring, giống iOS (không còn fade rời từng icon).
-	• NỘI DUNG vào theo tầng (stagger): header trước, progress/nút sau, mỗi tầng trượt lên + scale + fade.
-	• Số/chữ đổi giá trị có hiệu ứng "roll" (trượt lên + hiện dần) như content transition của iOS.
-	• Compact đối xứng quanh tâm như đảo thật (trái = phải), thân dùng CanvasGroup nên nội dung
-	  bị cắt đúng theo góc bo (v1 bị tràn ở góc).
-	• Kéo: kéo lên thì đảo bám theo ngón tay, kéo xuống thì giãn kiểu dây cao su rồi nảy về.
-	• Vẫn chỉ chạy RenderStepped khi đang animation, đứng yên = 0 chi phí.
-
-	CÁCH DÙNG (API giữ nguyên như v1)
+	CÁCH DÙNG (API giữ nguyên)
 	    local Island = loadstring(game:HttpGet("LINK_RAW_CUA_BAN"))()
 	    local island = Island.new({
-	        Top = 11, Scale = nil,          -- Scale nil = tự co theo màn hình
-	        Style = "Frosted",              -- "Frosted" = kính xám mờ đục (kiểu Night Hub) | "Dark" = kính đen kiểu iOS
-	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
-	                                        --   { NearIntensity = 1, Inset = 6, Slices = 8, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
-	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur)
-	        Transparency = nil,             -- độ trong của kính (nil = theo Style)
+	        Top = 11, Scale = nil,
+	        Style = "Frosted",              -- "Frosted" = kính xám đục Night Hub | "Dark" = kính đen iOS
+	        RealBlur = true,                -- hoặc { NearIntensity = 1.15, Inset = 4, Slices = 12, ... }
+	        Glass = true,
+	        Transparency = nil,             -- nil = theo Style (Frosted ~0.32 đục vừa)
+	        AlwaysLiquid = true,            -- true = luôn RenderStepped cho liquid sống (mặc định)
 	    })
 
 	    island:Notify({ Title = "Auto Farm", Text = "Đã bật Level Farm",
-	        Color = Island.Colors.Green, Duration = 3, Callback = function() end })
-
-	    island:SetActivity({ Title = "Auto Farm", Text = "Level Farm • Bandit",
-	        Color = Island.Colors.Green, Right = "Lv 120", Progress = 0.35,
+	        Color = Island.Colors.Green, Duration = 3 })
+	    island:SetActivity({ Title = "Auto Farm", Text = "Level Farm • 89%",
+	        Color = Island.Colors.Green, Right = "Lv 132", Progress = 0.89,
 	        Buttons = {
 	            { Text = "Dừng", Style = "destructive", Callback = function() end },
-	            { Text = "Ẩn",   Style = "default",     Callback = function() island:Collapse() end },
+	            { Text = "Tạm dừng", Style = "default", Callback = function() end },
+	            { Text = "Thu gọn", Style = "prominent", Callback = function() island:Collapse() end },
 	        } })
-	    island:UpdateActivity({ Right = "Lv 121", Progress = 0.6 })
+	    island:UpdateActivity({ Right = "Lv 133", Progress = 0.92 })
 	    island:Expand() / :Collapse() / :Toggle() / :ClearActivity()
 	    island:Hide() / :Show() / :SetGlass(true|false) / :SetBlur(true|false|{...}) / :SetTop(px) / :SetScale(s) / :Destroy()
 
-	Bấm vào đảo (khi có Activity) = mở rộng / thu lại.  Vuốt lên = đóng.
-	Icon: Icon = "rbxassetid://123" (hoặc số id) hoặc Glyph = "⚡"; không có thì lấy chữ cái đầu của Title.
-	Chạy thử nhanh: getgenv().DynamicIslandDemo = true trước khi load file này.
+	Bấm đảo (có Activity) = mở/thu. Vuốt lên = đóng.
+	Icon: Icon = "rbxassetid://..." hoặc Glyph = "A"; không có thì chữ cái đầu Title.
+	Demo: getgenv().DynamicIslandDemo = true trước khi load.
 
-	GIỚI HẠN CỦA ROBLOX (nói thật)
-	• Roblox không có backdrop-blur cho GUI. RealBlur dùng mẹo Part Glass + DepthOfField: chỉ mờ cảnh 3D phía sau,
-	  không mờ ScreenGui khác, cần đồ hoạ >= 8, và tốn thêm tài nguyên. Các thông số DepthOfField mình tính theo lý thuyết,
-	  CHƯA kiểm chứng trong Roblox: nếu mờ yếu/lệch thì chỉnh NearIntensity, Distance, FocusDistance trong RealBlur.
-	• UICorner là bo tròn thường, không phải squircle liên tục (continuous corner) của Apple.
-	• DepthOfField có thể lem mờ ra ngoài vật thể một chút. Inset đã thu Part vào trong; nếu vẫn thấy lem ra ngoài viền thì
-	  tăng Inset, giảm NearIntensity, hoặc đặt RealBlur = false.
+	GIỚI HẠN ROBLOX
+	• Không có backdrop-blur GUI thật. RealBlur = Part + DepthOfField → chỉ mờ cảnh 3D, cần Quality ≥ 8.
+	• UICorner không phải continuous squircle. DepthOfField có thể lem nhẹ → tăng Inset nếu cần.
 ]]
 
 local Players = game:GetService("Players")
@@ -117,32 +106,33 @@ local RIM_ANGLE = { idle = 40, activity = 58, notify = 72, expanded = 100, hidde
 
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
--- Hai phong cách kính. Frosted = kính xám mờ đục như Night Hub (nên đi cùng RealBlur), Dark = kính đen như iOS
+-- Hai phong cách kính. Frosted = kính xám đục Night Hub (nên đi cùng RealBlur), Dark = kính đen iOS
+-- Tone Frosted lấy theo ảnh 2: xám trung tính hơi lạnh, đục vừa (không quá trong, không đen đặc)
 local STYLES = {
-	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.4, depthAlpha = 0.035, sheenTop = 0.84 },
-	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.9 },
+	Frosted = { base = Color3.fromRGB(52, 54, 60), transparency = 0.28, depthAlpha = 0.045, sheenTop = 0.88 },
+	Dark = { base = Color3.fromRGB(28, 30, 36), transparency = 0.10, depthAlpha = 0.08, sheenTop = 0.92 },
 }
--- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
+-- Mờ nền thật: Part + DepthOfField. Thông số tối ưu cho blur mạnh, sát viền như Night Hub
 local BLUR_DEFAULTS = {
-	Transparency = 0.985, -- lớp nền không phản chiếu; chỉ dùng để tạo vùng DOF
-	Distance = nil, -- khoảng cách Part tới camera; nil = tự tính theo NearPlaneZ
-	FocusDistance = nil, -- nil = Distance * 2
-	InFocusRadius = 100,
-	NearIntensity = 1, -- độ mờ (0..1)
-	Slices = 8, -- số lát mỗi bên để xấp xỉ góc bo
-	Inset = 6, -- thu vùng mờ vào trong px để phần mờ lem ra không vượt khỏi viền kính
+	Transparency = 0.988, -- gần trong suốt hoàn toàn, chỉ tạo vùng DOF
+	Distance = nil, -- nil = tự tính theo NearPlaneZ
+	FocusDistance = nil, -- nil = Distance * 2.2
+	InFocusRadius = 80, -- vùng nét nhỏ hơn → blur mạnh hơn quanh đảo
+	NearIntensity = 1.15, -- mờ mạnh (clamp 0..1 ở runtime)
+	Slices = 12, -- nhiều lát hơn → góc bo mượt, ít bậc thang
+	Inset = 4, -- thu chặt để blur không lem ra ngoài viền kính
 }
--- Quầng sáng theo ngón tay: GLOW_N vòng tròn rất nhạt chồng nhau, vòng lớn nhất = GLOW_D (khớp khung Glow 170px)
-local GLOW_N, GLOW_D, GLOW_A = 16, 170, 0.0157
--- Viền kính: mỗi lớp là một UIStroke bám mép và dày vào TRONG thân. t = bề dày (px), lo = độ trong ở chỗ sáng nhất, mid = ở chỗ tối nhất.
--- Chồng 4 lớp -> mép sáng sắc rồi mờ dần vào trong (giống độ dày của kính). Không còn bóng đổ/viền nào nằm ngoài thân.
+-- Quầng sáng ngón tay: nhiều vòng nhạt chồng → radial mượt
+local GLOW_N, GLOW_D, GLOW_A = 18, 180, 0.0135
+-- Viền kính 5 lớp: mép sắc → mờ dần vào trong (độ dày kính)
 local EDGE_LAYERS = {
-	{ t = 1.1, lo = 0.28, mid = 0.90 },
-	{ t = 2.6, lo = 0.80, mid = 0.97 },
-	{ t = 5, lo = 0.90, mid = 0.99 },
-	{ t = 8.5, lo = 0.95, mid = 1 },
+	{ t = 0.9, lo = 0.22, mid = 0.88 },
+	{ t = 2.0, lo = 0.55, mid = 0.94 },
+	{ t = 3.8, lo = 0.78, mid = 0.97 },
+	{ t = 6.2, lo = 0.90, mid = 0.99 },
+	{ t = 9.5, lo = 0.96, mid = 1.00 },
 }
-local DEPTH_N, DEPTH_STEP = 8, 2 -- chiều sâu kính: 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
+local DEPTH_N, DEPTH_STEP = 10, 1.7 -- chiều sâu kính dày hơn, mượt hơn
 
 ----------------------------------------------------------------------
 -- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
@@ -528,6 +518,7 @@ function Island.new(config)
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
 		Transparency = config.Transparency or style.transparency,
+		AlwaysLiquid = config.AlwaysLiquid ~= false, -- mặc định luôn liquid loop
 	}
 	self._glass = self._cfg.Glass
 	self._conns = {}
@@ -548,11 +539,13 @@ function Island.new(config)
 	self._expSig = nil
 	self._activityW = M.IdleW + M.LeadW * 2
 	self._expW, self._expH = M.ExpandedW, M.BannerH
+	self._liquidT = 0 -- thời gian tích luỹ cho liquid breathing / rim drift
 
 	self:_build()
 	self:_connect()
 	self:_render(false)
 	self:_blurInit()
+	self:_startLiquidLoop() -- luôn chạy nếu AlwaysLiquid
 	return self
 end
 
@@ -1273,6 +1266,12 @@ function Island:_render(instant)
 end
 
 function Island:_startLoop()
+	-- Khi AlwaysLiquid đã chạy liquid loop thì không cần loop riêng;
+	-- chỉ đánh dấu cần spring step (liquid loop sẽ xử lý).
+	if self._cfg.AlwaysLiquid and self._liquidLoop then
+		self._needSpring = true
+		return
+	end
 	if self._loop or self._destroyed then
 		return
 	end
@@ -1298,6 +1297,86 @@ function Island:_startLoop()
 			end
 		end
 	end)
+end
+
+-- Liquid loop liên tục: breathing + rim drift + depth pulse (tận dụng tối đa RenderStepped)
+function Island:_startLiquidLoop()
+	if not self._cfg.AlwaysLiquid or self._liquidLoop or self._destroyed then
+		return
+	end
+	self._needSpring = true
+	self._liquidLoop = RunService.RenderStepped:Connect(function(dt)
+		if self._destroyed then
+			return
+		end
+		dt = math.min(dt, 1 / 20)
+		self._liquidT = self._liquidT + dt
+
+		-- Spring step khi đang animate hoặc vừa đổi state
+		local settled = true
+		if self._needSpring then
+			for _, s in ipairs(self._springs) do
+				s:Step(dt)
+				if not s:Settled() then
+					settled = false
+				end
+			end
+			if settled then
+				for _, s in ipairs(self._springs) do
+					s:Snap(s.t)
+				end
+				self._needSpring = false
+				if self._hidden then
+					self._gui.Enabled = false
+				end
+			end
+		end
+
+		self:_applyLiquid(dt)
+		self:_apply()
+	end)
+end
+
+function Island:_applyLiquid(dt)
+	if not self._glass or self._hidden then
+		return
+	end
+	local t = self._liquidT
+
+	-- Breathing nhẹ thân kính (scale rất nhỏ ~0.4%)
+	local breath = 1 + 0.0038 * math.sin(t * 1.15)
+	if self._pressScale and not self._press then
+		-- không đè lên press scale
+		local cur = self._pressScale.Scale
+		if math.abs(cur - 1) < 0.02 then
+			self._pressScale.Scale = breath
+		end
+	end
+
+	-- Rim light trôi chậm quanh viền (liquid feel)
+	local baseAng = RIM_ANGLE[self._lastState or "idle"] or 40
+	local drift = 12 * math.sin(t * 0.55) + 6 * math.sin(t * 1.1 + 0.7)
+	local ang = baseAng + drift
+	for _, e in ipairs(self._edges) do
+		if e.grad then
+			e.grad.Rotation = ang
+		end
+	end
+
+	-- Depth layers pulse nhẹ (chiều sâu kính sống)
+	local depthPulse = 0.012 * (0.5 + 0.5 * math.sin(t * 0.9))
+	for i, d in ipairs(self._depth) do
+		if d.frame and d.frame.Visible then
+			local base = 1 - self._style.depthAlpha
+			d.frame.BackgroundTransparency = math.clamp(base - depthPulse * (1 - (i - 1) / DEPTH_N), 0.85, 0.99)
+		end
+	end
+
+	-- Tint soft pulse khi có accent
+	if self._tint and self._tint.BackgroundTransparency < 0.95 then
+		local a = 0.04 + 0.03 * math.sin(t * 1.4)
+		self._tint.BackgroundTransparency = math.clamp(a, 0, 1)
+	end
 end
 
 ----------------------------------------------------------------------
@@ -1339,8 +1418,8 @@ function Island:_blurInit()
 		local dof = Instance.new("DepthOfFieldEffect")
 		dof.Name = "DynamicIslandBlur"
 		dof.FarIntensity = 0
-		dof.NearIntensity = b.NearIntensity
-		dof.InFocusRadius = b.InFocusRadius
+		dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
+		dof.InFocusRadius = b.InFocusRadius or 80
 		dof.FocusDistance = 0.4
 		dof.Enabled = false
 		dof.Parent = Lighting
@@ -1423,10 +1502,15 @@ function Island:_blurStep()
 	end)
 	local near = (okz and type(z) == "number") and math.abs(z) or 0.1
 	local d = b.Distance or math.max(0.2, near * 2)
-	local focus = b.FocusDistance or d * 2
+	local focus = b.FocusDistance or d * 2.2
 	if self._dofFocus ~= focus then
 		self._dofFocus = focus
 		self._dof.FocusDistance = focus
+	end
+	-- đồng bộ NearIntensity (có thể chỉnh runtime qua SetBlur)
+	local ni = math.clamp(b.NearIntensity or 1, 0, 1)
+	if self._dof.NearIntensity ~= ni then
+		self._dof.NearIntensity = ni
 	end
 
 	-- Lens breathing: một callback RenderStep duy nhất cập nhật hình học mỗi frame.
@@ -1648,6 +1732,10 @@ function Island:Destroy()
 		self._loop:Disconnect()
 		self._loop = nil
 	end
+	if self._liquidLoop then
+		self._liquidLoop:Disconnect()
+		self._liquidLoop = nil
+	end
 	for _, c in ipairs(self._conns) do
 		pcall(function()
 			c:Disconnect()
@@ -1668,34 +1756,40 @@ local okEnv, env = pcall(function()
 end)
 if okEnv and env and env.DynamicIslandDemo then
 	env.DynamicIslandDemo = nil
-	local island = Island.new()
+	local island = Island.new({
+		Style = "Frosted",
+		RealBlur = true,
+		AlwaysLiquid = true,
+	})
 	task.spawn(function()
-		task.wait(1.2)
+		task.wait(1.0)
 		island:Notify({
 			Title = "Dynamic Island",
-			Text = "Liquid glass đã sẵn sàng",
+			Text = "Liquid glass Night Hub style sẵn sàng",
 			Color = Island.Colors.Blue,
-			Duration = 3,
+			Duration = 2.8,
 		})
-		task.wait(5)
+		task.wait(4)
 		island:SetActivity({
 			Title = "Auto Farm",
-			Text = "Level Farm • Bandit",
+			Text = "Level Farm • 89%",
 			Color = Island.Colors.Green,
-			Right = "Lv 120",
-			Progress = 0.25,
+			Right = "Lv 132",
+			Progress = 0.89,
 			Buttons = {
 				{ Text = "Dừng", Style = "destructive", Callback = function() island:ClearActivity() end },
-				{ Text = "Thu gọn", Callback = function() island:Collapse() end },
+				{ Text = "Tạm dừng", Style = "default", Callback = function() end },
+				{ Text = "Thu gọn", Style = "prominent", Callback = function() island:Collapse() end },
 			},
 		})
-		task.wait(2)
+		task.wait(1.5)
 		island:Expand()
-		for i = 1, 6 do
-			task.wait(0.8)
-			island:UpdateActivity({ Progress = 0.25 + i * 0.12, Right = "Lv " .. (120 + i) })
+		for i = 1, 5 do
+			task.wait(0.7)
+			local p = math.min(0.89 + i * 0.02, 1)
+			island:UpdateActivity({ Progress = p, Right = "Lv " .. (132 + i), Text = "Level Farm • " .. math.floor(p * 100) .. "%" })
 		end
-		task.wait(1)
+		task.wait(1.2)
 		island:Collapse()
 	end)
 end
