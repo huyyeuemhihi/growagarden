@@ -1,12 +1,10 @@
 --[[
 	DynamicIsland.lua  v4.1  -  Dynamic Island + Liquid Glass chân thực (Night Hub / high-quality)
 	-------------------------------------------------------------------------------
-	MỚI Ở v4.1 (nâng chất lượng liquid ~400Hz)
-	• Spring substep ~400Hz – chuyển động mượt, không rung khi FPS thấp.
-	• Viền kính 8 lớp + depth 16 lớp – độ dày kính rõ, mép sáng mượt.
-	• RealBlur: Slices 20, Inset 3, InFocusRadius 60 – blur nền mạnh, sát góc bo.
-	• Liquid loop mỗi frame: multi-freq rim drift, depth pulse, edge breath, body micro-breath, tint pulse.
-	• Frosted tối hơn, đục vừa (transparency ~0.22) để nền mờ hiện rõ qua kính.
+	MỚI Ở v4.2
+	• Depth: 100 lớp CÙNG kích cỡ chồng lên nhau → kính đục/dày cực mạnh.
+	• Spring ~400Hz, viền 8 lớp, RealBlur mạnh, liquid loop mỗi frame.
+	• SheenTop + Frost overlay; Frosted transparency ~0.22.
 
 	MỚI Ở v4 (khớp ảnh Night Hub – kính đục mờ thật + liquid sống)
 	• Style Frosted tone Night Hub + AlwaysLiquid + RealBlur mạnh.
@@ -114,15 +112,16 @@ local STYLES = {
 	Frosted = { base = Color3.fromRGB(38, 42, 48), transparency = 0.22, depthAlpha = 0.055, sheenTop = 0.90 },
 	Dark = { base = Color3.fromRGB(22, 24, 28), transparency = 0.08, depthAlpha = 0.09, sheenTop = 0.94 },
 }
--- Mờ nền thật: Part + DepthOfField – chất lượng cao (nhiều lát, blur mạnh)
+-- Mờ nền thật: Part (Glass) + DepthOfField – cấu hình mạnh để nền sau kính bị mờ rõ
 local BLUR_DEFAULTS = {
-	Transparency = 0.990,
-	Distance = nil,
-	FocusDistance = nil,
-	InFocusRadius = 60, -- vùng nét nhỏ → blur mạnh quanh đảo
-	NearIntensity = 1, -- max blur (0..1)
-	Slices = 20, -- rất nhiều lát → góc bo mượt, gần continuous
-	Inset = 3, -- thu chặt, blur sát viền kính
+	Transparency = 0.999, -- gần như vô hình; Glass material kích hoạt DOF
+	Distance = 0.15, -- sát camera hơn → vùng blur ổn định
+	FocusDistance = 0.35,
+	InFocusRadius = 25, -- vùng nét rất nhỏ → hầu hết hậu cảnh mờ
+	NearIntensity = 1,
+	FarIntensity = 0,
+	Slices = 24,
+	Inset = 2,
 }
 -- Quầng sáng ngón tay: nhiều vòng cực nhạt → radial mượt như liquid
 local GLOW_N, GLOW_D, GLOW_A = 24, 200, 0.011
@@ -137,8 +136,8 @@ local EDGE_LAYERS = {
 	{ t = 10.0, lo = 0.93, mid = 0.995 },
 	{ t = 13.0, lo = 0.97, mid = 1.00 },
 }
--- Chiều sâu kính: nhiều lớp mỏng chồng → giữa tối, mép sáng mờ (frosted dày)
-local DEPTH_N, DEPTH_STEP = 16, 1.15
+-- Chiều sâu kính: 100 lớp CÙNG kích cỡ chồng lên nhau → kính đục/dày cực mạnh
+local DEPTH_N, DEPTH_STEP = 100, 0 -- step 0 = mọi lớp full size, chỉ khác transparency
 
 ----------------------------------------------------------------------
 -- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
@@ -675,24 +674,61 @@ function Island:_build()
 
 	-- Không tạo lớp specular/reflection; giữ tint, glow, depth và viền kính.
 
-	-- 4) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
+	-- 4) Chiều sâu kính: 100 lớp CÙNG kích cỡ, transparency tăng dần
+	--    → chồng 100 lớp đục nhẹ = kính dày, frosted mạnh (không thu nhỏ từng lớp)
 	self._depth = {}
+	local baseAlpha = self._style.depthAlpha or 0.055
+	-- mỗi lớp rất nhạt; 100 lớp chồng ≈ đục rõ
+	local perLayer = math.clamp(baseAlpha * 2.2 / DEPTH_N, 0.004, 0.025)
 	for i = 1, DEPTH_N do
+		local inset = (DEPTH_STEP > 0) and (i * DEPTH_STEP) or 0
 		local f = mk("Frame", {
 			BackgroundColor3 = BLACK,
-			BackgroundTransparency = 1 - self._style.depthAlpha,
+			BackgroundTransparency = 1 - perLayer,
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.new(1, -2 * i * DEPTH_STEP, 1, -2 * i * DEPTH_STEP),
+			Size = UDim2.new(1, -2 * inset, 1, -2 * inset),
 			ZIndex = 0,
 			Visible = glass,
 		}, body)
 		local c = mk("UICorner", {}, f)
-		table.insert(self._depth, { frame = f, corner = c, inset = i * DEPTH_STEP })
+		table.insert(self._depth, { frame = f, corner = c, inset = inset, alpha = perLayer })
 	end
 
-	-- 6) Vệt sáng quét ngang khi đổi trạng thái
+	-- 5) Lớp frost / sheen trên kính (giả lập bề mặt mờ đục + vệt sáng mép trên)
+	self._sheenTop = glassItem(mk("Frame", {
+		Name = "SheenTop",
+		BackgroundColor3 = WHITE,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 1,
+	}, body))
+	self._sheenTopCorner = mk("UICorner", { CornerRadius = UDim.new(0, 20) }, self._sheenTop)
+	addGradient(self._sheenTop, 90, {
+		{ 0, 0.88 },
+		{ 0.35, 0.96 },
+		{ 0.55, 1 },
+		{ 1, 1 },
+	})
+
+	-- Inner frost: lớp trắng rất nhạt → kính đục hơn kể cả khi DOF yếu
+	self._frost = glassItem(mk("Frame", {
+		Name = "Frost",
+		BackgroundColor3 = Color3.fromRGB(220, 225, 235),
+		BackgroundTransparency = 0.92,
+		BorderSizePixel = 0,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 1,
+	}, body))
+	self._frostCorner = mk("UICorner", { CornerRadius = UDim.new(0, 20) }, self._frost)
+	addGradient(self._frost, 90, {
+		{ 0, 0.85 },
+		{ 0.4, 0.92 },
+		{ 1, 0.97 },
+	})
+
+	-- 6) Vệt sáng quét ngang khi đổi trạng thái (tắt mặc định)
 	self._glint = glassItem(mk("Frame", {
 		Name = "Glint",
 		BackgroundColor3 = WHITE,
@@ -702,7 +738,7 @@ function Island:_build()
 	}, body))
 	self._glintGrad = addGradient(self._glint, 20, { { 0, 1 }, { 0.4, 1 }, { 0.5, 0.82 }, { 0.6, 1 }, { 1, 1 } })
 	self._glintGrad.Offset = Vector2.new(-1, 0)
-	self._glint.Visible = false -- tắt vệt phản chiếu quét ngang
+	self._glint.Visible = false
 
 	-- Viền kính (rim light): chồng nhiều UIStroke bám mép và dày vào trong -> sắc ở mép, mờ dần vào trong như độ dày của kính.
 	-- Nằm TRONG body (CanvasGroup) nên bị cắt đúng đường bo, không thể tràn ra ngoài.
@@ -774,6 +810,12 @@ function Island:_apply()
 	self._shell.Size = UDim2.fromOffset(w, h)
 	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
 	self._bodyCorner.CornerRadius = UDim.new(0, r)
+	if self._sheenTopCorner then
+		self._sheenTopCorner.CornerRadius = UDim.new(0, r)
+	end
+	if self._frostCorner then
+		self._frostCorner.CornerRadius = UDim.new(0, r)
+	end
 
 	local k = math.clamp(h / 16, 0, 1) -- viền mỏng dần khi đảo thu về 0
 	-- Viền kính: mỗi lớp là UIStroke dày VÀO TRONG thân (khung thụt t, stroke dày t nằm ngoài khung thụt = đúng mép thân)
@@ -792,6 +834,10 @@ function Island:_apply()
 		d.frame.Visible = fits
 		if fits then
 			d.corner.CornerRadius = UDim.new(0, math.max(r - d.inset, 0))
+			-- cùng kích cỡ khi DEPTH_STEP = 0
+			if d.inset == 0 then
+				d.frame.Size = UDim2.fromScale(1, 1)
+			end
 		end
 	end
 
@@ -1384,17 +1430,17 @@ function Island:_applyLiquid(dt)
 		end
 	end
 
-	-- Depth layers pulse (chiều sâu kính sống, lớp trong pulse mạnh hơn)
-	local depthPulse = 0.018 * (0.5 + 0.5 * math.sin(t * 0.85))
-		+ 0.008 * (0.5 + 0.5 * math.sin(t * 1.6 + 0.3))
+	-- Depth layers pulse (100 lớp cùng size – pulse nhẹ đồng đều)
+	local depthPulse = 0.006 * (0.5 + 0.5 * math.sin(t * 0.85))
+		+ 0.003 * (0.5 + 0.5 * math.sin(t * 1.6 + 0.3))
 	for i, d in ipairs(self._depth) do
 		if d.frame and d.frame.Visible then
-			local base = 1 - self._style.depthAlpha
-			local factor = 1 - (i - 1) / math.max(DEPTH_N, 1)
+			local a = d.alpha or (self._style.depthAlpha / DEPTH_N)
+			-- transparency = 1 - alpha; pulse làm đậm/nhạt nhẹ
 			d.frame.BackgroundTransparency = math.clamp(
-				base - depthPulse * factor,
-				0.82,
-				0.995
+				1 - a - depthPulse * (0.3 + 0.7 * ((i - 1) / math.max(DEPTH_N, 1))),
+				0.90,
+				0.998
 			)
 		end
 	end
@@ -1410,6 +1456,11 @@ function Island:_applyLiquid(dt)
 		local baseT = self._cfg.Transparency or self._style.transparency
 		local micro = 0.012 * math.sin(t * 0.7)
 		self._body.BackgroundTransparency = math.clamp(baseT + micro, 0.05, 0.55)
+	end
+
+	-- Frost layer soft pulse
+	if self._frost and self._frost.Visible then
+		self._frost.BackgroundTransparency = math.clamp(0.90 + 0.04 * math.sin(t * 0.95), 0.86, 0.96)
 	end
 end
 
@@ -1449,12 +1500,21 @@ function Island:_blurInit()
 	end
 
 	local ok = pcall(function()
+		-- Tắt / giảm các DOF khác nếu có để tránh xung đột
+		for _, fx in ipairs(Lighting:GetChildren()) do
+			if fx:IsA("DepthOfFieldEffect") and fx.Name ~= "DynamicIslandBlur" then
+				pcall(function()
+					fx.Enabled = false
+				end)
+			end
+		end
+
 		local dof = Instance.new("DepthOfFieldEffect")
 		dof.Name = "DynamicIslandBlur"
-		dof.FarIntensity = 0
+		dof.FarIntensity = b.FarIntensity or 0
 		dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
-		dof.InFocusRadius = b.InFocusRadius or 80
-		dof.FocusDistance = 0.4
+		dof.InFocusRadius = b.InFocusRadius or 25
+		dof.FocusDistance = b.FocusDistance or 0.35
 		dof.Enabled = false
 		dof.Parent = Lighting
 		self._dof = dof
@@ -1470,11 +1530,12 @@ function Island:_blurInit()
 			part.CanQuery = false
 			part.CanTouch = false
 			part.CastShadow = false
-			part.Material = Enum.Material.SmoothPlastic -- không phản chiếu mặt trời / môi trường
+			-- Glass material + transparency cao = kích hoạt DOF vùng blur sau part
+			part.Material = Enum.Material.Glass
 			part.Reflectance = 0
-			part.Color = Color3.fromRGB(185, 190, 200)
-			part.Transparency = math.clamp(b.Transparency, 0.975, 0.995)
-			part.Size = Vector3.new(0.01, 0.01, 0.005)
+			part.Color = Color3.fromRGB(200, 205, 215)
+			part.Transparency = math.clamp(b.Transparency or 0.999, 0.985, 0.9995)
+			part.Size = Vector3.new(0.01, 0.01, 0.008)
 			part.Parent = folder
 			self._blurParts[i] = { part = part, cf = CFrame.new() }
 		end
@@ -1534,17 +1595,21 @@ function Island:_blurStep()
 	local okz, z = pcall(function()
 		return cam.NearPlaneZ
 	end)
-	local near = (okz and type(z) == "number") and math.abs(z) or 0.1
-	local d = b.Distance or math.max(0.2, near * 2)
-	local focus = b.FocusDistance or d * 2.2
+	local near = (okz and type(z) == "number") and math.abs(z) or 0.05
+	-- Distance cố định sát camera → DOF ổn định hơn
+	local d = b.Distance or math.max(0.12, near * 1.5)
+	local focus = b.FocusDistance or (d * 2.5)
 	if self._dofFocus ~= focus then
 		self._dofFocus = focus
 		self._dof.FocusDistance = focus
 	end
-	-- đồng bộ NearIntensity (có thể chỉnh runtime qua SetBlur)
 	local ni = math.clamp(b.NearIntensity or 1, 0, 1)
 	if self._dof.NearIntensity ~= ni then
 		self._dof.NearIntensity = ni
+	end
+	local ifr = b.InFocusRadius or 25
+	if self._dof.InFocusRadius ~= ifr then
+		self._dof.InFocusRadius = ifr
 	end
 
 	-- Lens breathing: cập nhật hình học mỗi frame (organic, multi-frequency)
