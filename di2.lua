@@ -124,7 +124,7 @@ local STYLES = {
 }
 -- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
 local BLUR_DEFAULTS = {
-	Transparency = 0.965, -- kính nền mờ hơn nhẹ; hiệu quả phụ thuộc chất lượng đồ họa
+	Transparency = 0.985, -- lớp nền không phản chiếu; chỉ dùng để tạo vùng DOF
 	Distance = nil, -- khoảng cách Part tới camera; nil = tự tính theo NearPlaneZ
 	FocusDistance = nil, -- nil = Distance * 2
 	InFocusRadius = 100,
@@ -142,8 +142,6 @@ local EDGE_LAYERS = {
 	{ t = 5, lo = 0.90, mid = 0.99 },
 	{ t = 8.5, lo = 0.95, mid = 1 },
 }
--- Lớp lens nền phóng đại rất nhẹ và thay đổi theo từng frame
-local SPEC_LAYERS = { { inset = 1.0, h = 0.46 }, { inset = 1.7, h = 0.36 }, { inset = 2.5, h = 0.26 } }
 local DEPTH_N, DEPTH_STEP = 8, 2 -- chiều sâu kính: 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
 
 ----------------------------------------------------------------------
@@ -704,6 +702,7 @@ function Island:_build()
 	}, body))
 	self._glintGrad = addGradient(self._glint, 20, { { 0, 1 }, { 0.4, 1 }, { 0.5, 0.82 }, { 0.6, 1 }, { 1, 1 } })
 	self._glintGrad.Offset = Vector2.new(-1, 0)
+	self._glint.Visible = false -- tắt vệt phản chiếu quét ngang
 
 	-- Viền kính (rim light): chồng nhiều UIStroke bám mép và dày vào trong -> sắc ở mép, mờ dần vào trong như độ dày của kính.
 	-- Nằm TRONG body (CanvasGroup) nên bị cắt đúng đường bo, không thể tràn ra ngoài.
@@ -1180,6 +1179,7 @@ function Island:_glassTransition(state)
 		return
 	end
 	self._glintGrad.Offset = Vector2.new(-1, 0)
+	self._glint.Visible = false -- tắt vệt phản chiếu quét ngang
 	tween(self._glintGrad, 0.95, { Offset = Vector2.new(1, 0) }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 	local ang = RIM_ANGLE[state] or 40
 	for _, e in ipairs(self._edges) do
@@ -1357,9 +1357,10 @@ function Island:_blurInit()
 			part.CanQuery = false
 			part.CanTouch = false
 			part.CastShadow = false
-			part.Material = Enum.Material.Glass
-			part.Color = WHITE
-			part.Transparency = b.Transparency
+			part.Material = Enum.Material.SmoothPlastic -- không phản chiếu mặt trời / môi trường
+			part.Reflectance = 0
+			part.Color = Color3.fromRGB(185, 190, 200)
+			part.Transparency = math.clamp(b.Transparency, 0.975, 0.995)
 			part.Size = Vector3.new(0.01, 0.01, 0.005)
 			part.Parent = folder
 			self._blurParts[i] = { part = part, cf = CFrame.new() }
@@ -1428,8 +1429,9 @@ function Island:_blurStep()
 		self._dof.FocusDistance = focus
 	end
 
-	-- Lens breathing: cập nhật từng frame, phóng đại nền rất nhẹ sau lớp kính.
-	-- Phần kính được inset thêm trước khi scale để tránh tràn khỏi mép bo.
+	-- Lens breathing: một callback RenderStep duy nhất cập nhật hình học mỗi frame.
+	-- Không dùng hàng trăm loop song song: chúng không tăng độ chân thực, chỉ tốn FPS.
+	-- Inset + reserve giữ mép vùng lens nằm bên trong thân đảo.
 	local t = os.clock()
 	local pulse = 1.012 + 0.008 * (0.5 + 0.5 * math.sin(t * 1.35))
 	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
