@@ -1,10 +1,12 @@
 --[[
 	DynamicIsland.lua  v4.1  -  Dynamic Island + Liquid Glass chân thực (Night Hub / high-quality)
 	-------------------------------------------------------------------------------
-	MỚI Ở v4.2
-	• Depth: 100 lớp CÙNG kích cỡ chồng lên nhau → kính đục/dày cực mạnh.
-	• Spring ~400Hz, viền 8 lớp, RealBlur mạnh, liquid loop mỗi frame.
-	• SheenTop + Frost overlay; Frosted transparency ~0.22.
+	MỚI Ở v4.4 – Liquid Glass y hệt 7eoeb (DevForum + video 0GuRAumWKHA)
+	• 9 part: 1 center + 4 edge + 4 corner, Model + 1 Highlight
+	• Glass Transparency = 2 (warp/nhoè cảnh 3D phía sau)
+	• Reposition mỗi frame theo vùng đảo
+	• UI body transparency ~0.38 để warp hiện rõ
+	• Depth 100 lớp; Spring ~400Hz; liquid loop
 
 	MỚI Ở v4 (khớp ảnh Night Hub – kính đục mờ thật + liquid sống)
 	• Style Frosted tone Night Hub + AlwaysLiquid + RealBlur mạnh.
@@ -109,20 +111,20 @@ local BLACK = Color3.new(0, 0, 0)
 -- Hai phong cách kính. Frosted = kính xám đục Night Hub (nên đi cùng RealBlur), Dark = kính đen iOS
 -- Tone Frosted: xám lạnh đục vừa, hơi tối để nền mờ hiện rõ qua kính
 local STYLES = {
-	Frosted = { base = Color3.fromRGB(38, 42, 48), transparency = 0.22, depthAlpha = 0.055, sheenTop = 0.90 },
-	Dark = { base = Color3.fromRGB(22, 24, 28), transparency = 0.08, depthAlpha = 0.09, sheenTop = 0.94 },
+	-- transparency cao hơn một chút để Liquid Glass warp phía sau hiện rõ (khuyến nghị DevForum)
+	Frosted = { base = Color3.fromRGB(38, 42, 48), transparency = 0.38, depthAlpha = 0.04, sheenTop = 0.90 },
+	Dark = { base = Color3.fromRGB(22, 24, 28), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.94 },
 }
--- Mờ nền thật: Glass Part (Transparency=1) + DepthOfField
--- Cách hoạt động (2026): part Glass trong suốt 100% trước camera → DOF làm mờ cảnh 3D SAU part
+-- Liquid Glass (7eoeb DevForum + video 0GuRAumWKHA):
+-- 9 part: 1 center + 4 edge + 4 corner | Glass Transparency=2 | Highlight trên Model
+-- Reposition mỗi frame theo vùng đảo → warp/nhoè cảnh 3D phía sau
+-- Cần Graphics Quality cao; không blur ScreenGui khác.
 local BLUR_DEFAULTS = {
-	Transparency = 1, -- BẮT BUỘC = 1 (tutorial 2026): part vô hình hoàn toàn
-	Distance = 0.5, -- khoảng cách part tới camera (studs)
-	FocusDistance = 0.5, -- focus tại part → NearIntensity mờ mọi thứ phía sau
-	InFocusRadius = 0, -- 0 = không có vùng nét, toàn bộ sau part đều mờ
-	NearIntensity = 1,
-	FarIntensity = 0,
-	Slices = 16,
-	Inset = 0, -- 0 = blur phủ đúng vùng đảo
+	Transparency = 2, -- đúng default LiquidGlassHandler
+	Distance = 0.4,
+	Inset = 0,
+	HighlightFill = 1,
+	HighlightOutline = 1,
 }
 -- Quầng sáng ngón tay: nhiều vòng cực nhạt → radial mượt như liquid
 local GLOW_N, GLOW_D, GLOW_A = 24, 200, 0.011
@@ -1484,7 +1486,7 @@ end
 
 function Island:_blurInit()
 	local opt = self._cfg.RealBlur
-	if not opt or self._dof then
+	if not opt or self._blurModel then
 		return
 	end
 	local b = {}
@@ -1497,64 +1499,67 @@ function Island:_blurInit()
 		end
 	end
 	self._blurCfg = b
-	if not graphicsOk() then
-		return
-	end
+	graphicsOk()
 
 	local ok = pcall(function()
-		-- Tắt DOF khác để tránh xung đột
-		for _, fx in ipairs(Lighting:GetChildren()) do
-			if fx:IsA("DepthOfFieldEffect") and fx.Name ~= "DynamicIslandBlur" then
-				pcall(function()
-					fx.Enabled = false
-				end)
-			end
+		-- Model chứa 9 part (giống LiquidGlassHandler: center + 4 edge + 4 corner)
+		local model = Instance.new("Model")
+		model.Name = "DynamicIslandLiquidGlass"
+		model.Parent = workspace
+		self._blurModel = model
+		self._blurFolder = model -- alias cho cleanup cũ
+
+		local glassT = math.max(b.Transparency or 2, 1.01)
+		local function makeGlass(name)
+			local p = Instance.new("Part")
+			p.Name = name
+			p.Anchored = true
+			p.CanCollide = false
+			p.CanQuery = false
+			p.CanTouch = false
+			p.CastShadow = false
+			p.Material = Enum.Material.Glass
+			p.Reflectance = 0
+			p.Color = Color3.new(1, 1, 1)
+			p.Transparency = glassT
+			p.Size = Vector3.new(0.05, 0.05, 0.05)
+			p.Parent = model
+			return p
 		end
 
-		local dof = Instance.new("DepthOfFieldEffect")
-		dof.Name = "DynamicIslandBlur"
-		dof.FarIntensity = b.FarIntensity or 0
-		dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
-		dof.InFocusRadius = b.InFocusRadius or 0
-		dof.FocusDistance = b.FocusDistance or 0.5
-		dof.Enabled = false
-		dof.Parent = Lighting
-		self._dof = dof
+		-- 1 center + 4 edges (Top/Bottom/Left/Right) + 4 corners (TL/TR/BL/BR)
+		self._blurParts = {
+			center = makeGlass("Center"),
+			edgeT = makeGlass("EdgeT"),
+			edgeB = makeGlass("EdgeB"),
+			edgeL = makeGlass("EdgeL"),
+			edgeR = makeGlass("EdgeR"),
+			cornerTL = makeGlass("CornerTL"),
+			cornerTR = makeGlass("CornerTR"),
+			cornerBL = makeGlass("CornerBL"),
+			cornerBR = makeGlass("CornerBR"),
+		}
 
-		-- Parts nằm trong Workspace (không parent Camera – ổn định hơn trên một số client)
-		local folder = Instance.new("Folder")
-		folder.Name = "DynamicIslandBlurParts"
-		folder.Parent = workspace
-		self._blurFolder = folder
-		self._blurParts = {}
-
-		local n = b.Slices * 2 + 1
-		for i = 1, n do
-			local part = Instance.new("Part")
-			part.Name = "BlurSlice" .. i
-			part.Anchored = true
-			part.CanCollide = false
-			part.CanQuery = false
-			part.CanTouch = false
-			part.CastShadow = false
-			part.Material = Enum.Material.Glass
-			part.Reflectance = 0
-			part.Color = Color3.new(1, 1, 1)
-			part.Transparency = 1 -- BẮT BUỘC = 1
-			part.Size = Vector3.new(0.05, 0.05, 0.05)
-			part.Parent = folder
-			self._blurParts[i] = { part = part, cf = CFrame.new() }
-		end
+		-- Một Highlight trên cả Model (giống LiquidGlassHandler)
+		local hl = Instance.new("Highlight")
+		hl.Name = "LiquidGlassHL"
+		hl.FillTransparency = b.HighlightFill or 1
+		hl.OutlineTransparency = b.HighlightOutline or 1
+		hl.FillColor = Color3.fromRGB(180, 190, 200)
+		hl.OutlineColor = Color3.new(1, 1, 1)
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Adornee = model
+		hl.Parent = model
+		self._blurHL = hl
 	end)
 	if not ok then
-		warn("[DynamicIsland] RealBlur init failed – blur nền sẽ không hoạt động")
+		warn("[DynamicIsland] LiquidGlass init failed")
 		self:_blurCleanup()
 		return
 	end
 
 	self._blurOn = false
-	self._blurKey = nil
-	self._blurName = "DynamicIslandBlur" .. tostring(math.random(1, 1000000))
+	self._blurName = "DI_LiquidGlass_" .. tostring(math.random(1, 1e6))
 	local function step()
 		self:_blurStep()
 	end
@@ -1569,26 +1574,23 @@ function Island:_blurInit()
 end
 
 function Island:_blurSetActive(on)
-	if self._blurOn == on or not self._dof then
+	if self._blurOn == on or not self._blurModel then
 		return
 	end
 	self._blurOn = on
-	self._dof.Enabled = on
-	if self._blurFolder then
-		for _, e in ipairs(self._blurParts or {}) do
-			if e.part then
-				e.part.Transparency = on and 1 or 1
-				e.part.LocalTransparencyModifier = on and 0 or 1
-			end
+	local glassT = math.max((self._blurCfg and self._blurCfg.Transparency) or 2, 1.01)
+	for _, p in pairs(self._blurParts or {}) do
+		if typeof(p) == "Instance" then
+			p.Transparency = on and glassT or 1
 		end
 	end
-	if not on then
-		self._blurKey = nil
+	if self._blurHL then
+		self._blurHL.Enabled = on
 	end
 end
 
 function Island:_blurStep()
-	if self._destroyed or not self._dof then
+	if self._destroyed or not self._blurModel then
 		return
 	end
 	local cam = workspace.CurrentCamera
@@ -1609,51 +1611,52 @@ function Island:_blurStep()
 	local ap = body.AbsolutePosition
 	local V = cam.ViewportSize
 	local fov = cam.FieldOfView
-	local d = b.Distance or 0.5
-
-	-- Đồng bộ DOF mỗi frame
-	self._dof.FocusDistance = b.FocusDistance or d
-	self._dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
-	self._dof.InFocusRadius = b.InFocusRadius or 0
-	self._dof.FarIntensity = b.FarIntensity or 0
-
-	local rpx = self._r or (as.Y / 2)
+	local d = b.Distance or 0.4
 	local ins = math.min(b.Inset or 0, as.X / 4, as.Y / 4)
-	local w = math.max(as.X - 2 * ins, 4)
-	local h = math.max(as.Y - 2 * ins, 4)
-	local r = math.max(math.min(rpx - ins, w / 2, h / 2), 0)
+
+	local wPx = math.max(as.X - 2 * ins, 4)
+	local hPx = math.max(as.Y - 2 * ins, 4)
+	local rPx = math.max(math.min((self._r or hPx / 2) - ins, wPx / 2, hPx / 2), 0)
 	local cx = ap.X + as.X / 2
 	local cy = ap.Y + as.Y / 2
 
-	-- studs-per-pixel tại khoảng cách d
-	local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y
+	-- px → studs tại khoảng cách d
+	local spp = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y
 	local camCF = cam.CFrame
+	local z = 0.05 -- độ dày part
 
-	local function place(i, px, py, pw, ph)
-		local e = self._blurParts[i]
-		if not e or not e.part then
+	local function place(part, px, py, pw, ph)
+		if not part then
 			return
 		end
-		local sw = math.max(pw * s, 0.01)
-		local sh = math.max(ph * s, 0.01)
-		e.part.Size = Vector3.new(sw, sh, 0.05)
-		-- Screen space → camera local: X phải, Y lên, Z về phía -LookVector
-		local offset = Vector3.new((px - V.X / 2) * s, -(py - V.Y / 2) * s, -d)
-		e.part.CFrame = camCF * CFrame.new(offset)
+		local sw = math.max(pw * spp, 0.008)
+		local sh = math.max(ph * spp, 0.008)
+		part.Size = Vector3.new(sw, sh, z)
+		local offset = Vector3.new((px - V.X / 2) * spp, -(py - V.Y / 2) * spp, -d)
+		part.CFrame = camCF * CFrame.new(offset)
 	end
 
-	local K = b.Slices or 16
-	-- Khối giữa (hình chữ nhật)
-	place(1, cx, cy, w - 2 * r, h)
-	-- Lát bo góc trái / phải
-	for j = 1, K do
-		local xc = (j - 0.5) * r / K
-		local dx = r - (j - 1) * r / K
-		local cornerInset = r - math.sqrt(math.max(r * r - dx * dx, 0))
-		local sh = h - 2 * cornerInset
-		place(1 + j, cx - w / 2 + xc, cy, r / K + 0.5, sh)
-		place(1 + K + j, cx + w / 2 - xc, cy, r / K + 0.5, sh)
-	end
+	local parts = self._blurParts
+	local midW = wPx - 2 * rPx
+	local midH = hPx - 2 * rPx
+
+	-- Center (hình chữ nhật giữa)
+	place(parts.center, cx, cy, midW, midH)
+
+	-- 4 Edges (chỉ phần thẳng, không gồm góc)
+	-- Top / Bottom: ngang, cao = rPx
+	place(parts.edgeT, cx, cy - hPx / 2 + rPx / 2, midW, rPx)
+	place(parts.edgeB, cx, cy + hPx / 2 - rPx / 2, midW, rPx)
+	-- Left / Right: dọc, rộng = rPx
+	place(parts.edgeL, cx - wPx / 2 + rPx / 2, cy, rPx, midH)
+	place(parts.edgeR, cx + wPx / 2 - rPx / 2, cy, rPx, midH)
+
+	-- 4 Corners (ô vuông rPx x rPx tại 4 góc)
+	local hx, hy = wPx / 2 - rPx / 2, hPx / 2 - rPx / 2
+	place(parts.cornerTL, cx - hx, cy - hy, rPx, rPx)
+	place(parts.cornerTR, cx + hx, cy - hy, rPx, rPx)
+	place(parts.cornerBL, cx - hx, cy + hy, rPx, rPx)
+	place(parts.cornerBR, cx + hx, cy + hy, rPx, rPx)
 end
 
 function Island:_blurCleanup()
@@ -1667,17 +1670,14 @@ function Island:_blurCleanup()
 		self._blurConn:Disconnect()
 		self._blurConn = nil
 	end
-	if self._blurFolder then
-		self._blurFolder:Destroy()
-		self._blurFolder = nil
+	if self._blurModel then
+		self._blurModel:Destroy()
+		self._blurModel = nil
 	end
-	if self._dof then
-		self._dof:Destroy()
-		self._dof = nil
-	end
+	self._blurFolder = nil
 	self._blurParts = nil
+	self._blurHL = nil
 	self._blurOn = false
-	self._blurKey = nil
 end
 
 -- Bật/tắt mờ nền thật khi đang chạy. on = true/false hoặc bảng thông số (xem BLUR_DEFAULTS)
