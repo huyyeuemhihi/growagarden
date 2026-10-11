@@ -18,9 +18,12 @@
 	    local Island = loadstring(game:HttpGet("LINK_RAW_CUA_BAN"))()
 	    local island = Island.new({
 	        Top = 11, Scale = nil,          -- Scale nil = tự co theo màn hình
-	        Glass = true,                   -- false = đen đặc 100% như iPhone thật
-	        Transparency = 0.1,             -- độ trong của kính (0 = đặc, 0.3 = trong hơn)
-	        Shadow = true,                  -- bóng đổ mềm quanh đảo
+	        Style = "Frosted",              -- "Frosted" = kính xám mờ đục (kiểu Night Hub) | "Dark" = kính đen kiểu iOS
+	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
+	                                        --   { NearIntensity = 1, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
+	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur)
+	        Transparency = nil,             -- độ trong của kính (nil = theo Style)
+	        Shadow = nil,                   -- bóng đổ mềm (nil = theo Style: Frosted tắt, Dark bật)
 	    })
 
 	    island:Notify({ Title = "Auto Farm", Text = "Đã bật Level Farm",
@@ -34,15 +37,16 @@
 	        } })
 	    island:UpdateActivity({ Right = "Lv 121", Progress = 0.6 })
 	    island:Expand() / :Collapse() / :Toggle() / :ClearActivity()
-	    island:Hide() / :Show() / :SetGlass(true|false) / :SetTop(px) / :SetScale(s) / :Destroy()
+	    island:Hide() / :Show() / :SetGlass(true|false) / :SetBlur(true|false|{...}) / :SetTop(px) / :SetScale(s) / :Destroy()
 
 	Bấm vào đảo (khi có Activity) = mở rộng / thu lại.  Vuốt lên = đóng.
 	Icon: Icon = "rbxassetid://123" (hoặc số id) hoặc Glyph = "⚡"; không có thì lấy chữ cái đầu của Title.
 	Chạy thử nhanh: getgenv().DynamicIslandDemo = true trước khi load file này.
 
 	GIỚI HẠN CỦA ROBLOX (nói thật)
-	• Roblox không có backdrop-blur cho từng GUI, nên "kính" ở đây là mô phỏng bằng gradient/stroke/độ trong,
-	  không làm mờ được cảnh phía sau.
+	• Roblox không có backdrop-blur cho GUI. RealBlur dùng mẹo Part Glass + DepthOfField: chỉ mờ cảnh 3D phía sau,
+	  không mờ ScreenGui khác, cần đồ hoạ >= 8, và tốn thêm tài nguyên. Các thông số DepthOfField mình tính theo lý thuyết,
+	  CHƯA kiểm chứng trong Roblox: nếu mờ yếu/lệch thì chỉnh NearIntensity, Distance, FocusDistance trong RealBlur.
 	• UICorner là bo tròn thường, không phải squircle liên tục (continuous corner) của Apple.
 ]]
 
@@ -51,6 +55,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
+local Lighting = game:GetService("Lighting")
 
 local Island = {}
 Island.__index = Island
@@ -104,11 +109,23 @@ local RIM_ANGLE = { idle = 40, activity = 58, notify = 72, expanded = 100, hidde
 
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
-local GLASS_BASE = Color3.fromRGB(30, 32, 38) -- nền kính mờ đục (xám lạnh), phần giữa được tối dần bằng các lớp DEPTH
+-- Hai phong cách kính. Frosted = kính xám mờ đục như Night Hub (nên đi cùng RealBlur), Dark = kính đen như iOS
+local STYLES = {
+	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.4, depthAlpha = 0.035, sheenTop = 0.84, shadow = false },
+	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.9, shadow = true },
+}
+-- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
+local BLUR_DEFAULTS = {
+	Transparency = 0.98, -- độ trong của Part kính
+	Distance = nil, -- khoảng cách Part tới camera; nil = tự tính theo NearPlaneZ
+	FocusDistance = nil, -- nil = Distance * 2
+	InFocusRadius = 100,
+	NearIntensity = 1, -- độ mờ (0..1)
+	Slices = 4, -- số lát mỗi bên để xấp xỉ góc bo
+}
 -- Bóng + chiều sâu kính dựng bằng NHIỀU lớp frame đặc, mỗi lớp rất nhạt (thay cho UIStroke dày bị lộ vòng)
 local SHADOW_N, SHADOW_STEP, SHADOW_ALPHA = 12, 2.2, 0.03 -- 12 lớp, mỗi lớp nở thêm 2.2px, đậm 3%
-local DEPTH_N, DEPTH_STEP, DEPTH_ALPHA = 8, 2, 0.07 -- 8 lớp thu dần vào trong, mỗi lớp tối thêm 7%
-local BTN_BG = Color3.fromRGB(58, 58, 60)
+local DEPTH_N, DEPTH_STEP = 8, 2 -- 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
 
 ----------------------------------------------------------------------
 -- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
@@ -431,12 +448,12 @@ local function newButton(parent, spec, accent, size, position)
 		btn.BackgroundTransparency = 0
 		btn.TextColor3 = WHITE
 	elseif style == "destructive" then
-		btn.BackgroundColor3 = BTN_BG
-		btn.BackgroundTransparency = 0.2
+		btn.BackgroundColor3 = WHITE
+		btn.BackgroundTransparency = 0.9
 		btn.TextColor3 = Island.Colors.Red
 	else
-		btn.BackgroundColor3 = BTN_BG
-		btn.BackgroundTransparency = 0.2
+		btn.BackgroundColor3 = WHITE
+		btn.BackgroundTransparency = 0.9
 		btn.TextColor3 = WHITE
 	end
 
@@ -481,14 +498,20 @@ function Island.new(config)
 	config = config or {}
 	local self = setmetatable({}, Island)
 
+	local styleName = config.Style == "Dark" and "Dark" or "Frosted"
+	local style = STYLES[styleName]
+	self._style = style
+
 	self._cfg = {
+		Style = styleName,
+		RealBlur = config.RealBlur ~= false and (config.RealBlur or true) or false,
 		Top = config.Top or 11,
 		Scale = config.Scale, -- nil = tự co theo màn hình
 		Intro = config.Intro ~= false,
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
-		Shadow = config.Shadow ~= false,
-		Transparency = config.Transparency or 0.12,
+		Shadow = config.Shadow == nil and style.shadow or config.Shadow,
+		Transparency = config.Transparency or style.transparency,
 	}
 	self._glass = self._cfg.Glass
 	self._conns = {}
@@ -514,6 +537,7 @@ function Island.new(config)
 	self:_build()
 	self:_connect()
 	self:_render(false)
+	self:_blurInit()
 	return self
 end
 
@@ -600,7 +624,7 @@ function Island:_build()
 	local body = mk("CanvasGroup", {
 		Name = "Body",
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = glass and GLASS_BASE or BLACK,
+		BackgroundColor3 = glass and self._style.base or BLACK,
 		BackgroundTransparency = glass and self._cfg.Transparency or 0,
 		BorderSizePixel = 0,
 		ZIndex = 1,
@@ -622,7 +646,7 @@ function Island:_build()
 		Size = UDim2.fromScale(1, 1),
 		ZIndex = 1,
 	}, body))
-	addGradient(sheen, 90, { { 0, 0.9 }, { 0.45, 1 }, { 0.82, 1 }, { 1, 0.955 } })
+	addGradient(sheen, 90, { { 0, self._style.sheenTop }, { 0.45, 1 }, { 0.82, 1 }, { 1, 0.955 } })
 
 	-- 2) Màu activity hắt lên kính (từ phía icon)
 	self._tint = glassItem(mk("Frame", {
@@ -674,7 +698,7 @@ function Island:_build()
 	for i = 1, DEPTH_N do
 		local f = mk("Frame", {
 			BackgroundColor3 = BLACK,
-			BackgroundTransparency = 1 - DEPTH_ALPHA,
+			BackgroundTransparency = 1 - self._style.depthAlpha,
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
@@ -754,6 +778,7 @@ function Island:_apply()
 	local w = math.max(sp.w.p, 1)
 	local h = math.max(sp.h.p, 1)
 	local r = math.min(h / 2, M.MaxCorner)
+	self._r = r
 
 	self._shell.Size = UDim2.fromOffset(w, h)
 	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
@@ -1281,6 +1306,205 @@ function Island:_startLoop()
 end
 
 ----------------------------------------------------------------------
+-- Mờ nền thật (RealBlur): Part vật liệu Glass gần như vô hình đặt sát camera + DepthOfField trong Lighting.
+-- Part được ghép từ 1 khối giữa + vài lát dọc mỗi bên để xấp xỉ góc bo, và bám theo đảo mỗi khung hình.
+-- Giới hạn: chỉ làm mờ cảnh 3D (không mờ ScreenGui khác), cần đồ hoạ >= 8, không dùng chung DepthOfField khác,
+-- Gui trong không gian 3D (Billboard/SurfaceGui) bị ẩn. Nếu không chạy được, đảo vẫn là kính xám mờ đục.
+----------------------------------------------------------------------
+local function graphicsOk()
+	local ok, v = pcall(function()
+		return settings().Rendering.QualityLevel.Value
+	end)
+	if not ok or type(v) ~= "number" then
+		return true
+	end
+	return v == 0 or v >= 8
+end
+
+function Island:_blurInit()
+	local opt = self._cfg.RealBlur
+	if not opt or self._dof then
+		return
+	end
+	local b = {}
+	for k, v in pairs(BLUR_DEFAULTS) do
+		b[k] = v
+	end
+	if type(opt) == "table" then
+		for k, v in pairs(opt) do
+			b[k] = v
+		end
+	end
+	self._blurCfg = b
+	if not graphicsOk() then
+		return
+	end
+
+	local ok = pcall(function()
+		local dof = Instance.new("DepthOfFieldEffect")
+		dof.Name = "DynamicIslandBlur"
+		dof.FarIntensity = 0
+		dof.NearIntensity = b.NearIntensity
+		dof.InFocusRadius = b.InFocusRadius
+		dof.FocusDistance = 0.4
+		dof.Enabled = false
+		dof.Parent = Lighting
+		self._dof = dof
+
+		local folder = Instance.new("Folder")
+		folder.Name = "DynamicIslandBlurParts"
+		self._blurFolder = folder
+		self._blurParts = {}
+		for i = 1, b.Slices * 2 + 1 do
+			local part = Instance.new("Part")
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			part.Material = Enum.Material.Glass
+			part.Color = WHITE
+			part.Transparency = b.Transparency
+			part.Size = Vector3.new(0.01, 0.01, 0.005)
+			part.Parent = folder
+			self._blurParts[i] = { part = part, cf = CFrame.new() }
+		end
+	end)
+	if not ok then
+		self:_blurCleanup()
+		return
+	end
+
+	self._blurOn = false
+	self._blurKey = nil
+	self._blurName = "DynamicIslandBlur" .. tostring(math.random(1, 1000000))
+	local function step()
+		self:_blurStep()
+	end
+	local bound = pcall(function()
+		RunService:BindToRenderStep(self._blurName, Enum.RenderPriority.Camera.Value + 1, step)
+	end)
+	if bound then
+		self._blurBound = true
+	else
+		self._blurConn = RunService.RenderStepped:Connect(step)
+	end
+end
+
+function Island:_blurSetActive(on)
+	if self._blurOn == on or not self._dof then
+		return
+	end
+	self._blurOn = on
+	self._dof.Enabled = on
+	if not on then
+		self._blurFolder.Parent = nil
+		self._blurKey = nil
+	end
+end
+
+function Island:_blurStep()
+	if self._destroyed or not self._dof then
+		return
+	end
+	local cam = workspace.CurrentCamera
+	local body = self._body
+	local as = body.AbsoluteSize
+	local want = cam ~= nil and self._glass and not self._hidden and self._gui.Enabled and as.X > 4 and as.Y > 4
+	if not want then
+		self:_blurSetActive(false)
+		return
+	end
+	self:_blurSetActive(true)
+	if self._blurFolder.Parent ~= cam then
+		self._blurFolder.Parent = cam
+	end
+
+	local b = self._blurCfg
+	local ap, V, fov = body.AbsolutePosition, cam.ViewportSize, cam.FieldOfView
+	local okz, z = pcall(function()
+		return cam.NearPlaneZ
+	end)
+	local near = (okz and type(z) == "number") and math.abs(z) or 0.1
+	local d = b.Distance or math.max(0.2, near * 2)
+	local focus = b.FocusDistance or d * 2
+	if self._dofFocus ~= focus then
+		self._dofFocus = focus
+		self._dof.FocusDistance = focus
+	end
+
+	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
+	local k = self._blurKey
+	local changed = not k
+		or k.x ~= ap.X or k.y ~= ap.Y or k.w ~= as.X or k.h ~= as.Y
+		or k.r ~= rpx or k.vx ~= V.X or k.vy ~= V.Y or k.fov ~= fov or k.d ~= d
+	if changed then
+		self._blurKey = { x = ap.X, y = ap.Y, w = as.X, h = as.Y, r = rpx, vx = V.X, vy = V.Y, fov = fov, d = d }
+		local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y -- studs trên mỗi pixel tại khoảng cách d
+		local w, h = as.X, as.Y
+		local r = math.min(rpx, w / 2, h / 2)
+		local K = b.Slices
+		local cy = ap.Y + h / 2
+		local parts = self._blurParts
+		local function place(i, cx, cyy, pw, ph)
+			local e = parts[i]
+			e.part.Size = Vector3.new(math.max(pw * s, 0.001), math.max(ph * s, 0.001), 0.005)
+			e.cf = CFrame.new((cx - V.X / 2) * s, -(cyy - V.Y / 2) * s, -d)
+		end
+		place(1, ap.X + w / 2, cy, w - 2 * r, h)
+		for j = 1, K do
+			local xc = (j - 0.5) * r / K
+			local dx = r - xc
+			local inset = r - math.sqrt(math.max(r * r - dx * dx, 0))
+			local sh = h - 2 * inset
+			place(1 + j, ap.X + xc, cy, r / K + 0.5, sh)
+			place(1 + K + j, ap.X + w - xc, cy, r / K + 0.5, sh)
+		end
+	end
+
+	local camCF = cam.CFrame
+	if changed or camCF ~= self._blurCamCF then
+		self._blurCamCF = camCF
+		for _, e in ipairs(self._blurParts) do
+			e.part.CFrame = camCF * e.cf
+		end
+	end
+end
+
+function Island:_blurCleanup()
+	if self._blurBound then
+		self._blurBound = false
+		pcall(function()
+			RunService:UnbindFromRenderStep(self._blurName)
+		end)
+	end
+	if self._blurConn then
+		self._blurConn:Disconnect()
+		self._blurConn = nil
+	end
+	if self._blurFolder then
+		self._blurFolder:Destroy()
+		self._blurFolder = nil
+	end
+	if self._dof then
+		self._dof:Destroy()
+		self._dof = nil
+	end
+	self._blurParts = nil
+	self._blurOn = false
+	self._blurKey = nil
+end
+
+-- Bật/tắt mờ nền thật khi đang chạy. on = true/false hoặc bảng thông số (xem BLUR_DEFAULTS)
+function Island:SetBlur(on)
+	self:_blurCleanup()
+	self._cfg.RealBlur = on and (on == true and true or on) or false
+	if self._cfg.RealBlur then
+		self:_blurInit()
+	end
+end
+
+----------------------------------------------------------------------
 -- API công khai
 ----------------------------------------------------------------------
 function Island:SetActivity(data)
@@ -1389,7 +1613,7 @@ end
 function Island:SetGlass(on)
 	self._glass = on and true or false
 	self._cfg.Glass = self._glass
-	self._body.BackgroundColor3 = self._glass and GLASS_BASE or BLACK
+	self._body.BackgroundColor3 = self._glass and self._style.base or BLACK
 	self._body.BackgroundTransparency = self._glass and self._cfg.Transparency or 0
 	for _, obj in ipairs(self._glassItems) do
 		obj.Visible = self._glass
@@ -1424,6 +1648,7 @@ function Island:Destroy()
 		end)
 	end
 	self._conns = {}
+	self:_blurCleanup()
 	if self._gui then
 		self._gui:Destroy()
 	end
