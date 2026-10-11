@@ -1,12 +1,11 @@
 --[[
 	DynamicIsland.lua  v4.1  -  Dynamic Island + Liquid Glass chân thực (Night Hub / high-quality)
 	-------------------------------------------------------------------------------
-	MỚI Ở v4.4 – Liquid Glass y hệt 7eoeb (DevForum + video 0GuRAumWKHA)
-	• 9 part: 1 center + 4 edge + 4 corner, Model + 1 Highlight
-	• Glass Transparency = 2 (warp/nhoè cảnh 3D phía sau)
-	• Reposition mỗi frame theo vùng đảo
-	• UI body transparency ~0.38 để warp hiện rõ
-	• Depth 100 lớp; Spring ~400Hz; liquid loop
+	MỚI Ở v4.5 – EditableImage liquid glass (boatbomber-inspired) + 7eoeb warp
+	• EditableImage 64×32 procedural: frost noise + fresnel mép + glare sống
+	• Cập nhật ~8fps trong liquid loop (CPU nhẹ)
+	• Giữ 9-part Glass Transparency=2 + Highlight (warp 3D khi Quality cao)
+	• Depth 100 lớp; Spring ~400Hz
 
 	MỚI Ở v4 (khớp ảnh Night Hub – kính đục mờ thật + liquid sống)
 	• Style Frosted tone Night Hub + AlwaysLiquid + RealBlur mạnh.
@@ -55,6 +54,7 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
 local Lighting = game:GetService("Lighting")
+local AssetService = game:GetService("AssetService")
 
 local Island = {}
 Island.__index = Island
@@ -731,6 +731,10 @@ function Island:_build()
 		{ 1, 0.97 },
 	})
 
+	-- 5b) EditableImage Liquid Glass pane (boatbomber-style procedural frost)
+	-- Thử tạo; nếu executor/API không hỗ trợ thì bỏ qua im lặng.
+	self:_initEditableGlass(body)
+
 	-- 6) Vệt sáng quét ngang khi đổi trạng thái (tắt mặc định)
 	self._glint = glassItem(mk("Frame", {
 		Name = "Glint",
@@ -818,6 +822,9 @@ function Island:_apply()
 	end
 	if self._frostCorner then
 		self._frostCorner.CornerRadius = UDim.new(0, r)
+	end
+	if self._eiCorner then
+		self._eiCorner.CornerRadius = UDim.new(0, r)
 	end
 
 	local k = math.clamp(h / 16, 0, 1) -- viền mỏng dần khi đảo thu về 0
@@ -1465,6 +1472,9 @@ function Island:_applyLiquid(dt)
 	if self._frost and self._frost.Visible then
 		self._frost.BackgroundTransparency = math.clamp(0.90 + 0.04 * math.sin(t * 0.95), 0.86, 0.96)
 	end
+
+	-- EditableImage liquid glass (throttled ~8fps)
+	self:_updateEditableGlass(false)
 end
 
 ----------------------------------------------------------------------
@@ -1482,6 +1492,141 @@ local function graphicsOk()
 		warn("[DynamicIsland] Graphics Quality =" .. tostring(v) .. " (< 8). RealBlur có thể yếu hoặc tắt. Hãy tăng Quality lên 8–10.")
 	end
 	return true
+end
+
+----------------------------------------------------------------------
+-- EditableImage Liquid Glass (boatbomber-inspired procedural)
+-- Không capture 3D thật (cần ViewportFrame rất nặng); vẽ frost + fresnel + glare lên buffer.
+----------------------------------------------------------------------
+local EI_W, EI_H = 64, 32 -- resolution thấp cho FPS; scale up bằng ImageLabel
+
+local function hash2(x, y)
+	local n = math.sin(x * 127.1 + y * 311.7) * 43758.5453
+	return n - math.floor(n)
+end
+
+local function smoothNoise(x, y)
+	local x0, y0 = math.floor(x), math.floor(y)
+	local fx, fy = x - x0, y - y0
+	fx = fx * fx * (3 - 2 * fx)
+	fy = fy * fy * (3 - 2 * fy)
+	local a = hash2(x0, y0)
+	local b = hash2(x0 + 1, y0)
+	local c = hash2(x0, y0 + 1)
+	local d = hash2(x0 + 1, y0 + 1)
+	return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy
+end
+
+function Island:_initEditableGlass(parent)
+	self._eiOk = false
+	local ok = pcall(function()
+		local img = AssetService:CreateEditableImage({ Size = Vector2.new(EI_W, EI_H) })
+		if not img then
+			error("CreateEditableImage returned nil")
+		end
+		self._ei = img
+
+		local label = Instance.new("ImageLabel")
+		label.Name = "EditableGlass"
+		label.BackgroundTransparency = 1
+		label.BorderSizePixel = 0
+		label.Size = UDim2.fromScale(1, 1)
+		label.ZIndex = 0
+		label.ScaleType = Enum.ScaleType.Stretch
+		label.Parent = parent
+		self._eiLabel = label
+		self._eiCorner = mk("UICorner", { CornerRadius = UDim.new(0, 20) }, label)
+
+		-- Gán Content (API mới) hoặc fallback Image nếu có
+		local assigned = pcall(function()
+			label.ImageContent = Content.fromObject(img)
+		end)
+		if not assigned then
+			-- một số executor chưa có Content.fromObject – vẫn giữ buffer để update sau
+			pcall(function()
+				label.Image = ""
+			end)
+		end
+
+		self._eiOk = true
+		self._eiLast = -1
+		self:_updateEditableGlass(true)
+	end)
+	if not ok then
+		self._ei = nil
+		self._eiLabel = nil
+		self._eiOk = false
+	end
+end
+
+function Island:_updateEditableGlass(force)
+	if not self._eiOk or not self._ei then
+		return
+	end
+	local t = self._liquidT or 0
+	-- cập nhật ~8 fps (đủ sống, ít tốn CPU)
+	if not force and (t - (self._eiLast or 0)) < 0.12 then
+		return
+	end
+	self._eiLast = t
+
+	local w, h = EI_W, EI_H
+	local pixels = buffer.create(w * h * 4)
+	local base = self._style and self._style.base or Color3.fromRGB(40, 44, 50)
+	local br, bg, bb = base.R, base.G, base.B
+	local accent = Island.Colors.Blue
+	if self._activity and self._activity.Color then
+		accent = self._activity.Color
+	end
+	local ar, ag, ab = accent.R, accent.G, accent.B
+
+	for y = 0, h - 1 do
+		for x = 0, w - 1 do
+			local u, v = x / (w - 1), y / (h - 1)
+			-- khoảng cách tới mép (0 = giữa, 1 = mép)
+			local dx = math.min(u, 1 - u) * 2
+			local dy = math.min(v, 1 - v) * 2
+			local edge = 1 - math.min(dx, dy)
+			edge = math.clamp(edge, 0, 1)
+			edge = edge * edge
+
+			-- frost noise
+			local n = smoothNoise(x * 0.35 + t * 0.8, y * 0.35 + t * 0.5)
+			local n2 = smoothNoise(x * 0.9 - t * 0.3, y * 0.9 + t * 0.4)
+			local frost = 0.15 + 0.25 * n + 0.1 * n2
+
+			-- fresnel (sáng mép)
+			local fresnel = edge * 0.55
+
+			-- glare (vệt sáng chéo)
+			local glareU = u + 0.15 * math.sin(t * 0.7)
+			local glare = math.exp(-((glareU - 0.35) ^ 2) * 18) * math.exp(-((v - 0.25) ^ 2) * 10)
+			glare = glare * 0.35
+
+			-- tint nhẹ từ accent
+			local tint = 0.08 + 0.06 * math.sin(t * 1.1 + u * 3)
+
+			local r = br * 0.55 + frost * 0.5 + fresnel * 0.7 + glare + ar * tint
+			local g = bg * 0.55 + frost * 0.52 + fresnel * 0.72 + glare + ag * tint
+			local b = bb * 0.55 + frost * 0.58 + fresnel * 0.78 + glare * 0.95 + ab * tint
+			local a = 0.42 + frost * 0.25 + fresnel * 0.2
+
+			r = math.clamp(r, 0, 1)
+			g = math.clamp(g, 0, 1)
+			b = math.clamp(b, 0, 1)
+			a = math.clamp(a, 0, 0.85)
+
+			local i = (y * w + x) * 4
+			buffer.writeu8(pixels, i, math.floor(r * 255))
+			buffer.writeu8(pixels, i + 1, math.floor(g * 255))
+			buffer.writeu8(pixels, i + 2, math.floor(b * 255))
+			buffer.writeu8(pixels, i + 3, math.floor(a * 255))
+		end
+	end
+
+	pcall(function()
+		self._ei:WritePixelsBuffer(Vector2.zero, Vector2.new(w, h), pixels)
+	end)
 end
 
 function Island:_blurInit()
@@ -1838,6 +1983,14 @@ function Island:Destroy()
 	end
 	self._conns = {}
 	self:_blurCleanup()
+	if self._ei then
+		pcall(function()
+			self._ei:Destroy()
+		end)
+		self._ei = nil
+	end
+	self._eiLabel = nil
+	self._eiOk = false
 	if self._gui then
 		self._gui:Destroy()
 	end
