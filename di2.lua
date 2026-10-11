@@ -10,8 +10,8 @@
 
 	MỚI Ở v2 (so với v1)
 	• LIQUID GLASS: thân kính tối hơi trong suốt, viền sáng chéo (rim light) xoay theo trạng thái,
-	  vệt phản chiếu phía trên, chiều sâu kính dựng bằng nhiều lớp frame (giữa tối, mép sáng mờ), ánh màu của activity hắt lên kính,
-	  quầng sáng chạy theo ngón tay khi chạm, vệt sáng quét ngang mỗi lần đổi trạng thái, bóng đổ mềm dựng bằng nhiều lớp frame nhạt (không còn vòng viền cứng).
+	  chiều sâu kính dựng bằng nhiều lớp frame (giữa tối, mép sáng mờ), ánh màu của activity hắt lên kính,
+	  quầng sáng chạy theo ngón tay khi chạm, bóng đổ mềm dựng bằng nhiều lớp frame nhạt (không còn vòng viền cứng).
 	• ICON DÙNG CHUNG (matched geometry): icon bay + co giãn + đổi độ bo từ compact -> banner -> expanded
 	  bằng spring, giống iOS (không còn fade rời từng icon).
 	• NỘI DUNG vào theo tầng (stagger): header trước, progress/nút sau, mỗi tầng trượt lên + scale + fade.
@@ -124,7 +124,7 @@ local STYLES = {
 }
 -- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
 local BLUR_DEFAULTS = {
-	Transparency = 0.98, -- độ trong của Part kính
+	Transparency = 0.965, -- kính nền mờ hơn nhẹ; hiệu quả phụ thuộc chất lượng đồ họa
 	Distance = nil, -- khoảng cách Part tới camera; nil = tự tính theo NearPlaneZ
 	FocusDistance = nil, -- nil = Distance * 2
 	InFocusRadius = 100,
@@ -142,7 +142,7 @@ local EDGE_LAYERS = {
 	{ t = 5, lo = 0.90, mid = 0.99 },
 	{ t = 8.5, lo = 0.95, mid = 1 },
 }
--- Vệt phản chiếu phía trên: 3 lớp thu hẹp dần (inset nhân với độ bo, h = tỉ lệ chiều cao thân)
+-- Lớp lens nền phóng đại rất nhẹ và thay đổi theo từng frame
 local SPEC_LAYERS = { { inset = 1.0, h = 0.46 }, { inset = 1.7, h = 0.36 }, { inset = 2.5, h = 0.26 } }
 local DEPTH_N, DEPTH_STEP = 8, 2 -- chiều sâu kính: 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
 
@@ -555,55 +555,14 @@ function Island.new(config)
 	self:_connect()
 	self:_render(false)
 	self:_blurInit()
-	self:_startGlassFrameLoop()
 	return self
 end
 
--- One lightweight frame loop for the glass surface: tiny moving specular/rim drift.
--- It animates existing gradients only (no per-frame Instance creation or layout rebuild).
-function Island:_startGlassFrameLoop()
-	if self._glassFrameConn then self._glassFrameConn:Disconnect() end
-	local elapsed = 0
-	self._glassFrameConn = RunService.RenderStepped:Connect(function(dt)
-		if self._destroyed then return end
-		if not self._glass or self._hidden or not self._gui or not self._gui.Enabled then return end
-		elapsed = elapsed + math.min(dt, 1 / 20)
-		local wave = math.sin(elapsed * 0.42)
-		for i, e in ipairs(self._edges) do
-			if e.frame and e.frame.Visible and e.grad then
-				-- Restrained angular drift creates a living reflected edge without a hard neon sweep.
-				e.grad.Rotation = (RIM_ANGLE[self:_state()] or 40) + wave * (2.0 + i * 0.45)
-			end
-		end
-		for i, sl in ipairs(self._specs) do
-			if sl.frame and sl.frame.Visible then
-				-- Very subtle vertical specular breathing; keep it static in size to avoid edge overflow.
-				sl.frame.BackgroundTransparency = math.clamp(0.88 + (0.025 * math.sin(elapsed * 0.7 + i * 0.8)), 0.84, 0.93)
-			end
-		end
-	end)
-end
-
 function Island:_autoScale()
-	local v = viewport()
 	if self._cfg.Scale then
-		-- Respect explicit scale, but prevent a user-supplied value from making the
-		-- expanded island wider/taller than the usable viewport.
-		local requested = math.max(0.5, self._cfg.Scale)
-		local top = math.max(0, self._cfg.Top or 0)
-		local safeBottom = 12
-		local expandedH = math.max(self._expH or 158, 158)
-		local fitH = math.max(0.5, (v.Y - top - safeBottom) / expandedH)
-		local fitW = math.max(0.5, (v.X - 24) / M.ExpandedW)
-		return math.min(requested, fitH, fitW)
+		return self._cfg.Scale
 	end
-	-- Scale to both axes; reserve a real safe area above the island and at the bottom.
-	local top = math.max(12, self._cfg.Top or 0)
-	local safeBottom = 12
-	local expandedH = math.max(self._expH or 158, 158)
-	local fitH = (v.Y - top - safeBottom) / expandedH
-	local fitW = (v.X - 24) / M.ExpandedW
-	return math.clamp(math.min(1.1, v.Y / 430, fitH, fitW), 0.5, 1.1)
+	return math.clamp(viewport().Y / 430, 0.82, 1.1)
 end
 
 function Island:_maxWidth()
@@ -679,15 +638,7 @@ function Island:_build()
 		return obj
 	end
 
-	-- 1) Ánh sáng phủ trên cùng + phản chiếu mờ ở đáy
-	local sheen = glassItem(mk("Frame", {
-		Name = "Sheen",
-		BackgroundColor3 = WHITE,
-		BorderSizePixel = 0,
-		Size = UDim2.fromScale(1, 1),
-		ZIndex = 1,
-	}, body))
-	addGradient(sheen, 90, { { 0, self._style.sheenTop }, { 0.45, 1 }, { 0.82, 1 }, { 1, 0.955 } })
+	-- Bỏ lớp sheen/specular phản chiếu: tránh vệt sáng bị lệch khi phóng to.
 
 	-- 2) Màu activity hắt lên kính (từ phía icon)
 	self._tint = glassItem(mk("Frame", {
@@ -724,23 +675,9 @@ function Island:_build()
 	end
 	self._glow = glow
 
-	-- 4) Vệt phản chiếu ở nửa trên (specular): 3 lớp thu hẹp dần để hai bên mờ mượt, không lộ khung chữ nhật bo
-	self._specs = {}
-	for i, L in ipairs(SPEC_LAYERS) do
-		local f = glassItem(mk("Frame", {
-			Name = "Specular" .. i,
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 0, 2),
-			BackgroundColor3 = WHITE,
-			BorderSizePixel = 0,
-			ZIndex = 1,
-		}, body))
-		local c = mk("UICorner", {}, f)
-		addGradient(f, 90, { { 0, 0.93 }, { 0.45, 0.985 }, { 1, 1 } })
-		table.insert(self._specs, { frame = f, corner = c, inset = L.inset, h = L.h })
-	end
+	-- Không tạo lớp specular/reflection; giữ tint, glow, depth và viền kính.
 
-	-- 5) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
+	-- 4) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
 	self._depth = {}
 	for i = 1, DEPTH_N do
 		local f = mk("Frame", {
@@ -836,12 +773,7 @@ function Island:_apply()
 	self._r = r
 
 	self._shell.Size = UDim2.fromOffset(w, h)
-	-- The spring can pull the island upward while dragging. Clamp its rendered
-	-- position against the top edge so the expanded shell/rim never leaves screen.
-	local topPx = math.max(0, self._cfg.Top or 0)
-	local safeTopPx = math.max(4, topPx)
-	local renderedY = math.max(sp.oy.p, 4 - safeTopPx)
-	self._shell.Position = UDim2.fromOffset(0, renderedY)
+	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
 	self._bodyCorner.CornerRadius = UDim.new(0, r)
 
 	local k = math.clamp(h / 16, 0, 1) -- viền mỏng dần khi đảo thu về 0
@@ -854,12 +786,6 @@ function Island:_apply()
 			e.frame.Size = UDim2.new(1, -2 * t, 1, -2 * t)
 			e.corner.CornerRadius = UDim.new(0, math.max(r - t, 0))
 			e.stroke.Thickness = t
-		end
-	end
-	if self._glass then
-		for _, sl in ipairs(self._specs) do
-			sl.frame.Size = UDim2.new(1, -r * sl.inset, 0, h * sl.h)
-			sl.corner.CornerRadius = UDim.new(0, math.max(r * 0.6, 2))
 		end
 	end
 	for _, d in ipairs(self._depth) do
@@ -1502,17 +1428,25 @@ function Island:_blurStep()
 		self._dof.FocusDistance = focus
 	end
 
+	-- Lens breathing: cập nhật từng frame, phóng đại nền rất nhẹ sau lớp kính.
+	-- Phần kính được inset thêm trước khi scale để tránh tràn khỏi mép bo.
+	local t = os.clock()
+	local pulse = 1.012 + 0.008 * (0.5 + 0.5 * math.sin(t * 1.35))
 	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
 	local k = self._blurKey
 	local changed = not k
 		or k.x ~= ap.X or k.y ~= ap.Y or k.w ~= as.X or k.h ~= as.Y
 		or k.r ~= rpx or k.vx ~= V.X or k.vy ~= V.Y or k.fov ~= fov or k.d ~= d
+		or not k.pulse or math.abs(k.pulse - pulse) >= 0.0005
 	if changed then
-		self._blurKey = { x = ap.X, y = ap.Y, w = as.X, h = as.Y, r = rpx, vx = V.X, vy = V.Y, fov = fov, d = d }
-		local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y -- studs trên mỗi pixel tại khoảng cách d
-		local ins = math.min(b.Inset or 0, as.X / 4, as.Y / 4) -- thu Part vào trong để vùng mờ (kể cả phần lem ra) nằm gọn dưới viền kính
-		local w, h = as.X - 2 * ins, as.Y - 2 * ins
-		local r = math.max(math.min(rpx - ins, w / 2, h / 2), 0)
+		self._blurKey = { x = ap.X, y = ap.Y, w = as.X, h = as.Y, r = rpx, vx = V.X, vy = V.Y, fov = fov, d = d, pulse = pulse }
+		local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y
+		local baseInset = math.min(b.Inset or 0, as.X / 4, as.Y / 4)
+		local reserve = math.min(math.min(as.X, as.Y) * 0.035, 10)
+		local ins = math.min(baseInset + reserve, as.X / 4, as.Y / 4)
+		local baseW, baseH = as.X - 2 * ins, as.Y - 2 * ins
+		local w, h = baseW * pulse, baseH * pulse
+		local r = math.max(math.min((rpx - ins) * pulse, w / 2, h / 2), 0)
 		local K = b.Slices
 		local cx, cy = ap.X + as.X / 2, ap.Y + as.Y / 2
 		local parts = self._blurParts
@@ -1524,12 +1458,11 @@ function Island:_blurStep()
 		place(1, cx, cy, w - 2 * r, h)
 		for j = 1, K do
 			local xc = (j - 0.5) * r / K
-			-- độ thụt theo MÉP NGOÀI của lát (không phải tâm lát) -> lát không bao giờ lòi ra khỏi đường bo góc
 			local dx = r - (j - 1) * r / K
 			local inset = r - math.sqrt(math.max(r * r - dx * dx, 0))
 			local sh = h - 2 * inset
-			place(1 + j, ap.X + ins + xc, cy, r / K + 0.3, sh)
-			place(1 + K + j, ap.X + as.X - ins - xc, cy, r / K + 0.3, sh)
+			place(1 + j, cx - w / 2 + xc, cy, r / K + 0.3, sh)
+			place(1 + K + j, cx + w / 2 - xc, cy, r / K + 0.3, sh)
 		end
 	end
 
@@ -1712,10 +1645,6 @@ function Island:Destroy()
 	if self._loop then
 		self._loop:Disconnect()
 		self._loop = nil
-	end
-	if self._glassFrameConn then
-		self._glassFrameConn:Disconnect()
-		self._glassFrameConn = nil
 	end
 	for _, c in ipairs(self._conns) do
 		pcall(function()
