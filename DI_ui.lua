@@ -30,7 +30,7 @@
 	• Backdrop: Roblox không cho đọc framebuffer, nên "dựng lại cảnh" bằng raycast lưới thưa (tối đa 28x14 điểm),
 	  chỗ trượt = màu trời theo mô hình ngày/đêm. Đây là xấp xỉ, không phải ảnh thật của màn hình.
 	• Hiệu năng: bán kính viền có cache (lượng tử 2px), lens chỉ dựng lại khi đảo đứng yên hoặc nền đổi,
-	  mọi việc chia nhỏ trong ngân sách Budget (ms/frame), tối đa 1 lần ghi EditableImage mỗi frame.
+	  mọi việc chia nhỏ trong ngân sách Budget (ms/frame), tối đa 1 lần ghi EditableImage mỗi frame; chế độ ContinuousRender ưu tiên đồng bộ nền liên tục.
 	• Không có EditableImage (hoặc lỗi) -> tự quay về kính cổ điển của v3.
 
 	MỚI Ở v3: hết tràn viền (mọi lớp nằm TRONG thân CanvasGroup), vùng mờ nền thật (Part DepthOfField) thu vào Inset px.
@@ -1022,11 +1022,11 @@ local LIQUID_DEFAULTS = {
 	GlareIntensity = 55, -- 0..100 (0 = tắt hẳn phản chiếu/glint)
 	GlareConvergence = 90, -- 0..100: glint bám chặt góc chéo
 	Backdrop = true, -- lấy mẫu cảnh 3D bằng raycast (false = chỉ lấy một lần)
-	BackdropHz = 12, -- mục tiêu quét backdrop; tốc độ thực tế còn tùy ngân sách raycast/frame
+	BackdropHz = 60, -- mục tiêu 60 Hz; renderer vẫn chia raycast theo ngân sách mỗi frame
 	ContinuousRender = true, -- luôn dựng lại lens khi có lượt quét backdrop hoàn tất
 	Sky = nil, -- { Top = Color3, Horizon = Color3 } nếu muốn ép màu trời
 	RimQuality = 2, -- siêu mẫu cho ảnh viền (1..3)
-	Budget = 3, -- ms tối đa mỗi frame cho việc dựng ảnh + raycast
+	Budget = 3, -- ms tối đa mỗi frame; tăng cao hơn có thể làm tụt FPS
 }
 
 local Liquid = {}
@@ -1407,7 +1407,7 @@ end
 function Liquid:_sample(now, dl)
 	local st = self.samp
 	if not st then
-		if now < self.nextSample or now - self.lastChange < SETTLE then
+		if not self.P.ContinuousRender and (now < self.nextSample or now - self.lastChange < SETTLE) then
 			return
 		end
 		local sh = self.shape
@@ -1517,7 +1517,7 @@ function Liquid:_flush(w)
 end
 
 ----------------------------------------------------------------------
--- Mỗi RenderStepped: viền -> ghi tối đa 1 ảnh -> lấy mẫu -> lens, tất cả trong ngân sách ms
+-- Mỗi RenderStepped: viền -> ghi ảnh -> lấy mẫu nền liên tục -> dựng lens theo ngân sách ms
 ----------------------------------------------------------------------
 function Liquid:Step()
 	if self.failed or self.destroyed or not self.enabled then
@@ -1560,7 +1560,8 @@ function Liquid:Step()
 
 	-- 3) backdrop
 	if os.clock() < deadline and (self.P.Backdrop ~= false or not self.sampledOnce) then
-		local ok, err = pcall(self._sample, self, now, min(deadline, os.clock() + 0.001))
+		local sampleBudget = self.P.ContinuousRender and 0.002 or 0.001
+		local ok, err = pcall(self._sample, self, now, min(deadline, os.clock() + sampleBudget))
 		if not ok then
 			self.sampErrors = (self.sampErrors or 0) + 1
 			self.samp = nil
@@ -1578,8 +1579,8 @@ function Liquid:Step()
 		and not self.lensJob
 		and not self.rimJob
 		and #self.writes == 0
-		and now - self.lastChange >= SETTLE
-		and now - self.lensStart >= LENS_GAP
+		and (self.P.ContinuousRender or now - self.lastChange >= SETTLE)
+		and (self.P.ContinuousRender or now - self.lensStart >= LENS_GAP)
 	then
 		self:_startLens(now)
 	end
