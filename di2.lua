@@ -112,16 +112,17 @@ local STYLES = {
 	Frosted = { base = Color3.fromRGB(38, 42, 48), transparency = 0.22, depthAlpha = 0.055, sheenTop = 0.90 },
 	Dark = { base = Color3.fromRGB(22, 24, 28), transparency = 0.08, depthAlpha = 0.09, sheenTop = 0.94 },
 }
--- Mờ nền thật: Part (Glass) + DepthOfField – cấu hình mạnh để nền sau kính bị mờ rõ
+-- Mờ nền thật: Glass Part (Transparency=1) + DepthOfField
+-- Cách hoạt động (2026): part Glass trong suốt 100% trước camera → DOF làm mờ cảnh 3D SAU part
 local BLUR_DEFAULTS = {
-	Transparency = 0.999, -- gần như vô hình; Glass material kích hoạt DOF
-	Distance = 0.15, -- sát camera hơn → vùng blur ổn định
-	FocusDistance = 0.35,
-	InFocusRadius = 25, -- vùng nét rất nhỏ → hầu hết hậu cảnh mờ
+	Transparency = 1, -- BẮT BUỘC = 1 (tutorial 2026): part vô hình hoàn toàn
+	Distance = 0.5, -- khoảng cách part tới camera (studs)
+	FocusDistance = 0.5, -- focus tại part → NearIntensity mờ mọi thứ phía sau
+	InFocusRadius = 0, -- 0 = không có vùng nét, toàn bộ sau part đều mờ
 	NearIntensity = 1,
 	FarIntensity = 0,
-	Slices = 24,
-	Inset = 2,
+	Slices = 16,
+	Inset = 0, -- 0 = blur phủ đúng vùng đảo
 }
 -- Quầng sáng ngón tay: nhiều vòng cực nhạt → radial mượt như liquid
 local GLOW_N, GLOW_D, GLOW_A = 24, 200, 0.011
@@ -1471,13 +1472,14 @@ end
 -- Gui trong không gian 3D (Billboard/SurfaceGui) bị ẩn. Nếu không chạy được, đảo vẫn là kính xám mờ đục.
 ----------------------------------------------------------------------
 local function graphicsOk()
+	-- Luôn thử init; DOF có thể hoạt động cả khi Quality < 8 trên một số client
 	local ok, v = pcall(function()
 		return settings().Rendering.QualityLevel.Value
 	end)
-	if not ok or type(v) ~= "number" then
-		return true
+	if ok and type(v) == "number" and v > 0 and v < 8 then
+		warn("[DynamicIsland] Graphics Quality =" .. tostring(v) .. " (< 8). RealBlur có thể yếu hoặc tắt. Hãy tăng Quality lên 8–10.")
 	end
-	return v == 0 or v >= 8
+	return true
 end
 
 function Island:_blurInit()
@@ -1500,7 +1502,7 @@ function Island:_blurInit()
 	end
 
 	local ok = pcall(function()
-		-- Tắt / giảm các DOF khác nếu có để tránh xung đột
+		-- Tắt DOF khác để tránh xung đột
 		for _, fx in ipairs(Lighting:GetChildren()) do
 			if fx:IsA("DepthOfFieldEffect") and fx.Name ~= "DynamicIslandBlur" then
 				pcall(function()
@@ -1513,34 +1515,39 @@ function Island:_blurInit()
 		dof.Name = "DynamicIslandBlur"
 		dof.FarIntensity = b.FarIntensity or 0
 		dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
-		dof.InFocusRadius = b.InFocusRadius or 25
-		dof.FocusDistance = b.FocusDistance or 0.35
+		dof.InFocusRadius = b.InFocusRadius or 0
+		dof.FocusDistance = b.FocusDistance or 0.5
 		dof.Enabled = false
 		dof.Parent = Lighting
 		self._dof = dof
 
+		-- Parts nằm trong Workspace (không parent Camera – ổn định hơn trên một số client)
 		local folder = Instance.new("Folder")
 		folder.Name = "DynamicIslandBlurParts"
+		folder.Parent = workspace
 		self._blurFolder = folder
 		self._blurParts = {}
-		for i = 1, b.Slices * 2 + 1 do
+
+		local n = b.Slices * 2 + 1
+		for i = 1, n do
 			local part = Instance.new("Part")
+			part.Name = "BlurSlice" .. i
 			part.Anchored = true
 			part.CanCollide = false
 			part.CanQuery = false
 			part.CanTouch = false
 			part.CastShadow = false
-			-- Glass material + transparency cao = kích hoạt DOF vùng blur sau part
 			part.Material = Enum.Material.Glass
 			part.Reflectance = 0
-			part.Color = Color3.fromRGB(200, 205, 215)
-			part.Transparency = math.clamp(b.Transparency or 0.999, 0.985, 0.9995)
-			part.Size = Vector3.new(0.01, 0.01, 0.008)
+			part.Color = Color3.new(1, 1, 1)
+			part.Transparency = 1 -- BẮT BUỘC = 1
+			part.Size = Vector3.new(0.05, 0.05, 0.05)
 			part.Parent = folder
 			self._blurParts[i] = { part = part, cf = CFrame.new() }
 		end
 	end)
 	if not ok then
+		warn("[DynamicIsland] RealBlur init failed – blur nền sẽ không hoạt động")
 		self:_blurCleanup()
 		return
 	end
@@ -1567,8 +1574,15 @@ function Island:_blurSetActive(on)
 	end
 	self._blurOn = on
 	self._dof.Enabled = on
+	if self._blurFolder then
+		for _, e in ipairs(self._blurParts or {}) do
+			if e.part then
+				e.part.Transparency = on and 1 or 1
+				e.part.LocalTransparencyModifier = on and 0 or 1
+			end
+		end
+	end
 	if not on then
-		self._blurFolder.Parent = nil
 		self._blurKey = nil
 	end
 end
@@ -1579,85 +1593,66 @@ function Island:_blurStep()
 	end
 	local cam = workspace.CurrentCamera
 	local body = self._body
+	if not cam or not body then
+		self:_blurSetActive(false)
+		return
+	end
 	local as = body.AbsoluteSize
-	local want = cam ~= nil and self._glass and not self._hidden and self._gui.Enabled and as.X > 4 and as.Y > 4
+	local want = self._glass and not self._hidden and self._gui.Enabled and as.X > 4 and as.Y > 4
 	if not want then
 		self:_blurSetActive(false)
 		return
 	end
 	self:_blurSetActive(true)
-	if self._blurFolder.Parent ~= cam then
-		self._blurFolder.Parent = cam
-	end
 
 	local b = self._blurCfg
-	local ap, V, fov = body.AbsolutePosition, cam.ViewportSize, cam.FieldOfView
-	local okz, z = pcall(function()
-		return cam.NearPlaneZ
-	end)
-	local near = (okz and type(z) == "number") and math.abs(z) or 0.05
-	-- Distance cố định sát camera → DOF ổn định hơn
-	local d = b.Distance or math.max(0.12, near * 1.5)
-	local focus = b.FocusDistance or (d * 2.5)
-	if self._dofFocus ~= focus then
-		self._dofFocus = focus
-		self._dof.FocusDistance = focus
-	end
-	local ni = math.clamp(b.NearIntensity or 1, 0, 1)
-	if self._dof.NearIntensity ~= ni then
-		self._dof.NearIntensity = ni
-	end
-	local ifr = b.InFocusRadius or 25
-	if self._dof.InFocusRadius ~= ifr then
-		self._dof.InFocusRadius = ifr
-	end
+	local ap = body.AbsolutePosition
+	local V = cam.ViewportSize
+	local fov = cam.FieldOfView
+	local d = b.Distance or 0.5
 
-	-- Lens breathing: cập nhật hình học mỗi frame (organic, multi-frequency)
-	-- Inset + reserve giữ mép vùng lens nằm bên trong thân đảo.
-	local t = os.clock()
-	local pulse = 1.008
-		+ 0.010 * (0.5 + 0.5 * math.sin(t * 1.2))
-		+ 0.004 * (0.5 + 0.5 * math.sin(t * 2.4 + 0.5))
-	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
-	local k = self._blurKey
-	local changed = not k
-		or k.x ~= ap.X or k.y ~= ap.Y or k.w ~= as.X or k.h ~= as.Y
-		or k.r ~= rpx or k.vx ~= V.X or k.vy ~= V.Y or k.fov ~= fov or k.d ~= d
-		or not k.pulse or math.abs(k.pulse - pulse) >= 0.0005
-	if changed then
-		self._blurKey = { x = ap.X, y = ap.Y, w = as.X, h = as.Y, r = rpx, vx = V.X, vy = V.Y, fov = fov, d = d, pulse = pulse }
-		local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y
-		local baseInset = math.min(b.Inset or 0, as.X / 4, as.Y / 4)
-		local reserve = math.min(math.min(as.X, as.Y) * 0.035, 10)
-		local ins = math.min(baseInset + reserve, as.X / 4, as.Y / 4)
-		local baseW, baseH = as.X - 2 * ins, as.Y - 2 * ins
-		local w, h = baseW * pulse, baseH * pulse
-		local r = math.max(math.min((rpx - ins) * pulse, w / 2, h / 2), 0)
-		local K = b.Slices
-		local cx, cy = ap.X + as.X / 2, ap.Y + as.Y / 2
-		local parts = self._blurParts
-		local function place(i, px, py, pw, ph)
-			local e = parts[i]
-			e.part.Size = Vector3.new(math.max(pw * s, 0.001), math.max(ph * s, 0.001), 0.005)
-			e.cf = CFrame.new((px - V.X / 2) * s, -(py - V.Y / 2) * s, -d)
-		end
-		place(1, cx, cy, w - 2 * r, h)
-		for j = 1, K do
-			local xc = (j - 0.5) * r / K
-			local dx = r - (j - 1) * r / K
-			local inset = r - math.sqrt(math.max(r * r - dx * dx, 0))
-			local sh = h - 2 * inset
-			place(1 + j, cx - w / 2 + xc, cy, r / K + 0.3, sh)
-			place(1 + K + j, cx + w / 2 - xc, cy, r / K + 0.3, sh)
-		end
-	end
+	-- Đồng bộ DOF mỗi frame
+	self._dof.FocusDistance = b.FocusDistance or d
+	self._dof.NearIntensity = math.clamp(b.NearIntensity or 1, 0, 1)
+	self._dof.InFocusRadius = b.InFocusRadius or 0
+	self._dof.FarIntensity = b.FarIntensity or 0
 
+	local rpx = self._r or (as.Y / 2)
+	local ins = math.min(b.Inset or 0, as.X / 4, as.Y / 4)
+	local w = math.max(as.X - 2 * ins, 4)
+	local h = math.max(as.Y - 2 * ins, 4)
+	local r = math.max(math.min(rpx - ins, w / 2, h / 2), 0)
+	local cx = ap.X + as.X / 2
+	local cy = ap.Y + as.Y / 2
+
+	-- studs-per-pixel tại khoảng cách d
+	local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y
 	local camCF = cam.CFrame
-	if changed or camCF ~= self._blurCamCF then
-		self._blurCamCF = camCF
-		for _, e in ipairs(self._blurParts) do
-			e.part.CFrame = camCF * e.cf
+
+	local function place(i, px, py, pw, ph)
+		local e = self._blurParts[i]
+		if not e or not e.part then
+			return
 		end
+		local sw = math.max(pw * s, 0.01)
+		local sh = math.max(ph * s, 0.01)
+		e.part.Size = Vector3.new(sw, sh, 0.05)
+		-- Screen space → camera local: X phải, Y lên, Z về phía -LookVector
+		local offset = Vector3.new((px - V.X / 2) * s, -(py - V.Y / 2) * s, -d)
+		e.part.CFrame = camCF * CFrame.new(offset)
+	end
+
+	local K = b.Slices or 16
+	-- Khối giữa (hình chữ nhật)
+	place(1, cx, cy, w - 2 * r, h)
+	-- Lát bo góc trái / phải
+	for j = 1, K do
+		local xc = (j - 0.5) * r / K
+		local dx = r - (j - 1) * r / K
+		local cornerInset = r - math.sqrt(math.max(r * r - dx * dx, 0))
+		local sh = h - 2 * cornerInset
+		place(1 + j, cx - w / 2 + xc, cy, r / K + 0.5, sh)
+		place(1 + K + j, cx + w / 2 - xc, cy, r / K + 0.5, sh)
 	end
 end
 
