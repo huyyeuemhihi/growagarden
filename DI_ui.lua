@@ -1022,7 +1022,7 @@ local LIQUID_DEFAULTS = {
 	GlareIntensity = 55, -- 0..100 (0 = tắt hẳn phản chiếu/glint)
 	GlareConvergence = 90, -- 0..100: glint bám chặt góc chéo
 	Backdrop = true, -- lấy mẫu cảnh 3D bằng raycast (false = chỉ lấy một lần)
-	BackdropHz = 10, -- số lần quét lại backdrop mỗi giây khi ContinuousRender bật
+	BackdropHz = 12, -- mục tiêu quét backdrop; tốc độ thực tế còn tùy ngân sách raycast/frame
 	ContinuousRender = true, -- luôn dựng lại lens khi có lượt quét backdrop hoàn tất
 	Sky = nil, -- { Top = Color3, Horizon = Color3 } nếu muốn ép màu trời
 	RimQuality = 2, -- siêu mẫu cho ảnh viền (1..3)
@@ -1428,7 +1428,7 @@ function Liquid:_sample(now, dl)
 		return
 	end
 	local gw, gh = st.gw, st.gh
-	local k = st.fresh and 1 or 0.55 -- làm mượt theo thời gian để khỏi nhấp nháy
+	local k = 1 -- cập nhật trực tiếp, tránh nền kính bị trễ/đuổi theo cảnh
 	local wb = clampN(self.P.SamplerWarp or 0.5, 0, 0.9) -- phải trùng với renderLens
 	while st.i < st.n and os.clock() < dl do
 		local i = st.i
