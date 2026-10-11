@@ -1,13 +1,15 @@
 --[[
-	DynamicIsland.lua  v4  -  Dynamic Island (iPhone 14 Pro) + Liquid Glass chân thực kiểu Night Hub
+	DynamicIsland.lua  v4.1  -  Dynamic Island + Liquid Glass chân thực (Night Hub / high-quality)
 	-------------------------------------------------------------------------------
+	MỚI Ở v4.1 (nâng chất lượng liquid ~400Hz)
+	• Spring substep ~400Hz – chuyển động mượt, không rung khi FPS thấp.
+	• Viền kính 8 lớp + depth 16 lớp – độ dày kính rõ, mép sáng mượt.
+	• RealBlur: Slices 20, Inset 3, InFocusRadius 60 – blur nền mạnh, sát góc bo.
+	• Liquid loop mỗi frame: multi-freq rim drift, depth pulse, edge breath, body micro-breath, tint pulse.
+	• Frosted tối hơn, đục vừa (transparency ~0.22) để nền mờ hiện rõ qua kính.
+
 	MỚI Ở v4 (khớp ảnh Night Hub – kính đục mờ thật + liquid sống)
-	• Style Frosted tinh chỉnh đúng tone Night Hub: xám đục vừa, nền 3D mờ mạnh phía sau lớp kính.
-	• RealBlur mạnh hơn (NearIntensity cao, Inset chặt, Slices nhiều) → blur nền giống ảnh 2.
-	• LUÔN chạy RenderStepped (liquid loop): breathing nhẹ, rim light trôi chậm, depth pulse,
-	  glow soft – tận dụng tối đa frame để kính “sống” như liquid glass thật, không chỉ animate khi đổi state.
-	• Viền kính 5 lớp + depth 10 lớp mượt hơn; không phản chiếu cứng (giữ noreflection).
-	• Opacity/độ đục mở giống panel Night Hub (không quá trong, không đen đặc).
+	• Style Frosted tone Night Hub + AlwaysLiquid + RealBlur mạnh.
 
 	MỚI Ở v3 (sửa tràn viền + kính chân thực hơn)
 	• HẾT TRÀN VIỀN: viền sáng là UIStroke nằm TRONG thân (CanvasGroup cắt đúng góc bo).
@@ -107,32 +109,36 @@ local RIM_ANGLE = { idle = 40, activity = 58, notify = 72, expanded = 100, hidde
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
 -- Hai phong cách kính. Frosted = kính xám đục Night Hub (nên đi cùng RealBlur), Dark = kính đen iOS
--- Tone Frosted lấy theo ảnh 2: xám trung tính hơi lạnh, đục vừa (không quá trong, không đen đặc)
+-- Tone Frosted: xám lạnh đục vừa, hơi tối để nền mờ hiện rõ qua kính
 local STYLES = {
-	Frosted = { base = Color3.fromRGB(52, 54, 60), transparency = 0.28, depthAlpha = 0.045, sheenTop = 0.88 },
-	Dark = { base = Color3.fromRGB(28, 30, 36), transparency = 0.10, depthAlpha = 0.08, sheenTop = 0.92 },
+	Frosted = { base = Color3.fromRGB(38, 42, 48), transparency = 0.22, depthAlpha = 0.055, sheenTop = 0.90 },
+	Dark = { base = Color3.fromRGB(22, 24, 28), transparency = 0.08, depthAlpha = 0.09, sheenTop = 0.94 },
 }
--- Mờ nền thật: Part + DepthOfField. Thông số tối ưu cho blur mạnh, sát viền như Night Hub
+-- Mờ nền thật: Part + DepthOfField – chất lượng cao (nhiều lát, blur mạnh)
 local BLUR_DEFAULTS = {
-	Transparency = 0.988, -- gần trong suốt hoàn toàn, chỉ tạo vùng DOF
-	Distance = nil, -- nil = tự tính theo NearPlaneZ
-	FocusDistance = nil, -- nil = Distance * 2.2
-	InFocusRadius = 80, -- vùng nét nhỏ hơn → blur mạnh hơn quanh đảo
-	NearIntensity = 1.15, -- mờ mạnh (clamp 0..1 ở runtime)
-	Slices = 12, -- nhiều lát hơn → góc bo mượt, ít bậc thang
-	Inset = 4, -- thu chặt để blur không lem ra ngoài viền kính
+	Transparency = 0.990,
+	Distance = nil,
+	FocusDistance = nil,
+	InFocusRadius = 60, -- vùng nét nhỏ → blur mạnh quanh đảo
+	NearIntensity = 1, -- max blur (0..1)
+	Slices = 20, -- rất nhiều lát → góc bo mượt, gần continuous
+	Inset = 3, -- thu chặt, blur sát viền kính
 }
--- Quầng sáng ngón tay: nhiều vòng nhạt chồng → radial mượt
-local GLOW_N, GLOW_D, GLOW_A = 18, 180, 0.0135
--- Viền kính 5 lớp: mép sắc → mờ dần vào trong (độ dày kính)
+-- Quầng sáng ngón tay: nhiều vòng cực nhạt → radial mượt như liquid
+local GLOW_N, GLOW_D, GLOW_A = 24, 200, 0.011
+-- Viền kính 8 lớp: mép sắc trắng → mờ dần vào trong (độ dày kính thật)
 local EDGE_LAYERS = {
-	{ t = 0.9, lo = 0.22, mid = 0.88 },
-	{ t = 2.0, lo = 0.55, mid = 0.94 },
-	{ t = 3.8, lo = 0.78, mid = 0.97 },
-	{ t = 6.2, lo = 0.90, mid = 0.99 },
-	{ t = 9.5, lo = 0.96, mid = 1.00 },
+	{ t = 0.6, lo = 0.12, mid = 0.82 },
+	{ t = 1.3, lo = 0.28, mid = 0.90 },
+	{ t = 2.4, lo = 0.48, mid = 0.94 },
+	{ t = 3.8, lo = 0.65, mid = 0.96 },
+	{ t = 5.5, lo = 0.78, mid = 0.98 },
+	{ t = 7.5, lo = 0.88, mid = 0.99 },
+	{ t = 10.0, lo = 0.93, mid = 0.995 },
+	{ t = 13.0, lo = 0.97, mid = 1.00 },
 }
-local DEPTH_N, DEPTH_STEP = 10, 1.7 -- chiều sâu kính dày hơn, mượt hơn
+-- Chiều sâu kính: nhiều lớp mỏng chồng → giữa tối, mép sáng mờ (frosted dày)
+local DEPTH_N, DEPTH_STEP = 16, 1.15
 
 ----------------------------------------------------------------------
 -- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
@@ -152,7 +158,8 @@ function Spring:SetParams(response, damping)
 end
 
 function Spring:Step(dt)
-	local steps = math.clamp(math.ceil(dt / (1 / 240)), 1, 12)
+	-- Substep ~400Hz equivalent để spring mượt, không rung khi FPS thấp
+	local steps = math.clamp(math.ceil(dt / (1 / 400)), 1, 24)
 	local h = dt / steps
 	for _ = 1, steps do
 		local a = -self.k * (self.p - self.t) - self.c * self.v
@@ -1343,39 +1350,66 @@ function Island:_applyLiquid(dt)
 	end
 	local t = self._liquidT
 
-	-- Breathing nhẹ thân kính (scale rất nhỏ ~0.4%)
-	local breath = 1 + 0.0038 * math.sin(t * 1.15)
+	-- Breathing nhẹ thân kính (~0.5%)
+	local breath = 1 + 0.0045 * math.sin(t * 1.05) + 0.0015 * math.sin(t * 2.3 + 0.4)
 	if self._pressScale and not self._press then
-		-- không đè lên press scale
 		local cur = self._pressScale.Scale
-		if math.abs(cur - 1) < 0.02 then
+		if math.abs(cur - 1) < 0.025 then
 			self._pressScale.Scale = breath
 		end
 	end
 
-	-- Rim light trôi chậm quanh viền (liquid feel)
+	-- Rim light trôi mượt quanh viền (nhiều tần số → liquid không đều)
 	local baseAng = RIM_ANGLE[self._lastState or "idle"] or 40
-	local drift = 12 * math.sin(t * 0.55) + 6 * math.sin(t * 1.1 + 0.7)
+	local drift = 18 * math.sin(t * 0.48)
+		+ 9 * math.sin(t * 0.95 + 0.6)
+		+ 4 * math.sin(t * 1.7 + 1.2)
 	local ang = baseAng + drift
-	for _, e in ipairs(self._edges) do
+	for i, e in ipairs(self._edges) do
 		if e.grad then
-			e.grad.Rotation = ang
+			-- mỗi lớp lệch nhẹ → cảm giác độ dày kính
+			e.grad.Rotation = ang + (i - 1) * 2.5
 		end
 	end
 
-	-- Depth layers pulse nhẹ (chiều sâu kính sống)
-	local depthPulse = 0.012 * (0.5 + 0.5 * math.sin(t * 0.9))
+	-- Edge stroke transparency breathing (mép sáng sống)
+	local edgePulse = 0.04 * (0.5 + 0.5 * math.sin(t * 1.25))
+	for i, e in ipairs(self._edges) do
+		if e.stroke and e.frame and e.frame.Visible then
+			local L = EDGE_LAYERS[i]
+			if L then
+				-- chỉ điều chỉnh nhẹ, giữ gradient chính
+				e.stroke.Transparency = math.clamp(edgePulse * (i / #self._edges), 0, 0.15)
+			end
+		end
+	end
+
+	-- Depth layers pulse (chiều sâu kính sống, lớp trong pulse mạnh hơn)
+	local depthPulse = 0.018 * (0.5 + 0.5 * math.sin(t * 0.85))
+		+ 0.008 * (0.5 + 0.5 * math.sin(t * 1.6 + 0.3))
 	for i, d in ipairs(self._depth) do
 		if d.frame and d.frame.Visible then
 			local base = 1 - self._style.depthAlpha
-			d.frame.BackgroundTransparency = math.clamp(base - depthPulse * (1 - (i - 1) / DEPTH_N), 0.85, 0.99)
+			local factor = 1 - (i - 1) / math.max(DEPTH_N, 1)
+			d.frame.BackgroundTransparency = math.clamp(
+				base - depthPulse * factor,
+				0.82,
+				0.995
+			)
 		end
 	end
 
-	-- Tint soft pulse khi có accent
+	-- Tint soft pulse khi có accent (ánh màu hắt lên kính)
 	if self._tint and self._tint.BackgroundTransparency < 0.95 then
-		local a = 0.04 + 0.03 * math.sin(t * 1.4)
-		self._tint.BackgroundTransparency = math.clamp(a, 0, 1)
+		local a = 0.03 + 0.035 * math.sin(t * 1.35) + 0.015 * math.sin(t * 2.1 + 0.8)
+		self._tint.BackgroundTransparency = math.clamp(a, 0, 0.12)
+	end
+
+	-- Body base transparency micro-breath (kính “thở”)
+	if self._body and self._glass then
+		local baseT = self._cfg.Transparency or self._style.transparency
+		local micro = 0.012 * math.sin(t * 0.7)
+		self._body.BackgroundTransparency = math.clamp(baseT + micro, 0.05, 0.55)
 	end
 end
 
@@ -1513,11 +1547,12 @@ function Island:_blurStep()
 		self._dof.NearIntensity = ni
 	end
 
-	-- Lens breathing: một callback RenderStep duy nhất cập nhật hình học mỗi frame.
-	-- Không dùng hàng trăm loop song song: chúng không tăng độ chân thực, chỉ tốn FPS.
+	-- Lens breathing: cập nhật hình học mỗi frame (organic, multi-frequency)
 	-- Inset + reserve giữ mép vùng lens nằm bên trong thân đảo.
 	local t = os.clock()
-	local pulse = 1.012 + 0.008 * (0.5 + 0.5 * math.sin(t * 1.35))
+	local pulse = 1.008
+		+ 0.010 * (0.5 + 0.5 * math.sin(t * 1.2))
+		+ 0.004 * (0.5 + 0.5 * math.sin(t * 2.4 + 0.5))
 	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
 	local k = self._blurKey
 	local changed = not k
