@@ -1679,8 +1679,10 @@ function Island.new(config)
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
 		Transparency = config.Transparency or style.transparency,
-		-- Truyền module gốc boatbomber/GlassmorphicUI vào đây để dùng đúng pipeline upstream.
+		-- Truyền ModuleScript/module gốc boatbeaker/GlassmorphicUI để dùng pipeline upstream.
 		GlassmorphicUI = config.GlassmorphicUI,
+		-- Chỉ bật nếu chủ động muốn renderer raycast cũ khi không có upstream.
+		LegacyGlassFallback = config.LegacyGlassFallback == true,
 	}
 	self._glass = self._cfg.Glass
 	self._conns = {}
@@ -1784,7 +1786,7 @@ function Island:_build()
 	}, shell)
 	self._body = body
 	self._bodyCorner = mk("UICorner", {}, body)
-	self:_lgCreate() -- lens (ZIndex 1) + rim (ZIndex 3); lỗi thì tự dùng kính cổ điển
+	self:_lgCreate() -- ưu tiên GlassmorphicUI upstream; thiếu module thì dùng kính cổ điển
 	self:_syncBodyFill()
 
 	local function glassItem(obj)
@@ -2832,9 +2834,9 @@ function Island:_syncBodyFill()
 	body.BackgroundTransparency = self._lgOn and 1 or self._cfg.Transparency
 end
 
--- Adapter dùng trực tiếp module upstream boatbomber/GlassmorphicUI.
--- Module gốc tự tạo GlassPane, lấy backdrop bằng pipeline EditableImage của repo,
--- và tự quản lý cập nhật; không dùng raycast/bicubic renderer tự viết bên dưới.
+-- Adapter dùng trực tiếp API của boatbeaker/GlassmorphicUI.
+-- Quan trọng: các thuộc tính UDim của upstream là tỷ lệ theo kích thước cửa sổ,
+-- không phải pixel offset như renderer cũ.
 local UpstreamGlass = {}
 UpstreamGlass.__index = UpstreamGlass
 
@@ -2843,23 +2845,68 @@ local function asUDim(v, fallback)
 		return v
 	end
 	if type(v) == "number" then
+		-- Số truyền vào từ API DynamicIsland cũ được hiểu là pixel.
 		return UDim.new(0, v)
 	end
 	return fallback
 end
 
+local function getUpstreamModule(candidate)
+	if type(candidate) == "table" and type(candidate.addGlassBackground) == "function" then
+		return candidate
+	end
+
+	-- Tự tìm nếu thư viện đã được cài dưới ReplicatedStorage.Packages.
+	local ok, module = pcall(function()
+		local rs = game:GetService("ReplicatedStorage")
+		local packages = rs:FindFirstChild("Packages")
+		local scriptModule = packages and packages:FindFirstChild("GlassmorphicUI")
+		if scriptModule and scriptModule:IsA("ModuleScript") then
+			return require(scriptModule)
+		end
+		return nil
+	end)
+	if ok and type(module) == "table" and type(module.addGlassBackground) == "function" then
+		return module
+	end
+	return nil
+end
+
 function UpstreamGlass.new(module, body, opts)
-	assert(type(module) == "table", "GlassmorphicUI module không hợp lệ")
+	module = getUpstreamModule(module)
+	assert(type(module) == "table", "Không tìm thấy GlassmorphicUI gốc. Cài ModuleScript tại ReplicatedStorage.Packages.GlassmorphicUI hoặc truyền config.GlassmorphicUI.")
 	assert(type(module.addGlassBackground) == "function", "Thiếu GlassmorphicUI.addGlassBackground")
-	local self = setmetatable({ module = module, body = body, alive = true }, UpstreamGlass)
+
+	local self = setmetatable({
+		module = module,
+		body = body,
+		alive = true,
+		cornerRadius = UDim.new(0.5, 0), -- Dynamic Island: góc bo bằng nửa chiều cao
+	}, UpstreamGlass)
+
+	-- API upstream tạo GlassPane và tự quản lý pipeline EditableImage/backdrop.
 	module.addGlassBackground(body)
 	self.pane = body:FindFirstChild("GlassPane")
 	assert(self.pane, "GlassmorphicUI không tạo GlassPane trong body")
-	self:SetParams(opts)
+
+	-- Đảm bảo pane phủ toàn thân và nằm dưới các lớp nội dung của Dynamic Island.
+	self.pane.Name = "GlassPane"
+	self.pane.AnchorPoint = Vector2.zero
+	self.pane.Position = UDim2.fromScale(0, 0)
+	self.pane.Size = UDim2.fromScale(1, 1)
+	self.pane.BackgroundTransparency = 1
+	self:SetParams(opts, true)
+	self:NoteShape()
+	-- Đợi Dynamic Island được đặt kích thước ban đầu trước khi rebuild ảnh.
+	task.defer(function()
+		if self.alive and self.body and self.body.Parent and type(self.module.forceUpdate) == "function" then
+			pcall(self.module.forceUpdate, self.body)
+		end
+	end)
 	return self
 end
 
-function UpstreamGlass:SetParams(opts)
+function UpstreamGlass:SetParams(opts, deferInitialUpdate)
 	if not self.alive then return end
 	opts = type(opts) == "table" and opts or {}
 	local body = self.body
@@ -2871,36 +2918,60 @@ function UpstreamGlass:SetParams(opts)
 	local function attr(name, value)
 		if value ~= nil then body:SetAttribute(name, value) end
 	end
-	attr("Thickness", asUDim(pick("Thickness", 16), UDim.new(0, 16)))
+
+	-- Dùng đúng kiểu và mặc định của README upstream v1.0.0.
+	attr("Thickness", asUDim(pick("Thickness", UDim.new(0.15, 0)), UDim.new(0.15, 0)))
 	attr("RefractionFactor", pick("RefractionFactor", 2.1))
 	attr("ChromaticAberration", pick("ChromaticAberration", 0.2))
-	attr("CornerRadius", asUDim(pick("CornerRadius", nil), UDim.new(0.8, 0)))
+	attr("CornerRadius", asUDim(pick("CornerRadius", self.cornerRadius), self.cornerRadius))
 	attr("SuperEllipseFactor", pick("SuperEllipseFactor", 3))
-	attr("FresnelSize", asUDim(pick("FresnelSize", 7), UDim.new(0, 7)))
+	attr("FresnelSize", asUDim(pick("FresnelSize", UDim.new(0.1, 0)), UDim.new(0.1, 0)))
 	attr("FresnelHardness", pick("FresnelHardness", 40))
 	attr("FresnelIntensity", pick("FresnelIntensity", 25))
-	attr("GlareSize", asUDim(pick("GlareSize", 10), UDim.new(0, 10)))
+	attr("GlareSize", asUDim(pick("GlareSize", UDim.new(0.2, 0)), UDim.new(0.2, 0)))
 	attr("GlareHardness", pick("GlareHardness", 40))
 	attr("GlareIntensity", pick("GlareIntensity", 70))
 	attr("GlareConvergence", pick("GlareConvergence", 90))
 	attr("GlareOppositeSide", pick("GlareOppositeSide", 50))
 	attr("GlareAngle", pick("GlareAngle", -50))
-	attr("BlurRadius", asUDim(pick("BlurRadius", 20), UDim.new(0, 20)))
+	attr("BlurRadius", asUDim(pick("BlurRadius", UDim.new(0.06, 0)), UDim.new(0.06, 0)))
 	attr("MaxOutputResolution", pick("MaxOutputResolution", 1024))
-	-- Transparency của upstream là alpha tint: 0 = opaque, 1 = không tint.
+
+	-- Upstream Transparency là alpha tint: 0 = đục, 1 = trong.
+	-- Không ghi đè mặc định upstream nếu người dùng không yêu cầu.
 	local transparency = opts.Transparency
-	if transparency == nil then
-		transparency = opts.Opacity ~= nil and (1 - opts.Opacity) or 0.2
+	if transparency == nil and opts.Opacity ~= nil then
+		transparency = 1 - math.clamp(opts.Opacity, 0, 1)
 	end
-	attr("Transparency", transparency)
-	body.BackgroundColor3 = opts.Tint or body.BackgroundColor3
-	if type(self.module.forceUpdate) == "function" then
+	if transparency ~= nil then
+		attr("Transparency", math.clamp(transparency, 0, 1))
+	end
+	if opts.Tint then
+		body.BackgroundColor3 = opts.Tint
+	end
+
+	if not deferInitialUpdate and type(self.module.forceUpdate) == "function" then
 		pcall(self.module.forceUpdate, body)
 	end
 end
 
+-- _apply() gọi hàm này mỗi frame khi spring chạy. Dùng UDim scale 0.5 để
+-- góc kính tự bám kích thước đảo, tránh ghi attribute liên tục và gây rebuild.
+function UpstreamGlass:NoteShape()
+	if not self.alive or not self.body then return end
+	if not self.body:GetAttribute("CornerRadius") then
+		self.body:SetAttribute("CornerRadius", self.cornerRadius)
+	end
+	if self.pane and self.pane.Parent then
+		self.pane.Position = UDim2.fromScale(0, 0)
+		self.pane.Size = UDim2.fromScale(1, 1)
+	end
+end
+
 function UpstreamGlass:SetVisible(visible)
-	if self.pane and self.pane.Parent then self.pane.Visible = visible end
+	if self.pane and self.pane.Parent then
+		self.pane.Visible = visible
+	end
 end
 
 function UpstreamGlass:Refresh()
@@ -2912,7 +2983,9 @@ end
 function UpstreamGlass:Destroy()
 	if not self.alive then return end
 	self.alive = false
-	if self.pane and self.pane.Parent then self.pane:Destroy() end
+	if self.pane and self.pane.Parent then
+		self.pane:Destroy()
+	end
 end
 
 function Island:_lgCreate()
@@ -2920,20 +2993,22 @@ function Island:_lgCreate()
 		return
 	end
 	local opts = type(self._cfg.Liquid) == "table" and self._cfg.Liquid or nil
-	local upstream = self._cfg.GlassmorphicUI
+	local upstream = getUpstreamModule(self._cfg.GlassmorphicUI)
 	local ok, lg
 	if upstream then
 		ok, lg = pcall(UpstreamGlass.new, upstream, self._body, opts)
-	else
-		-- Tương thích ngược: renderer cũ chỉ là fallback, không phải mã gốc upstream.
+	elseif self._cfg.LegacyGlassFallback then
+		-- Renderer raycast tự viết chỉ chạy khi được bật rõ ràng.
 		ok, lg = pcall(Liquid.new, self, self._body, opts)
+	else
+		ok, lg = false, "Thiếu GlassmorphicUI gốc; renderer raycast dự phòng đang tắt"
 	end
 	if ok and lg then
 		self._lg = lg
 		self._lgOn = true
 	else
 		self._lgOn = false
-		warn("[DynamicIsland] Không bật được Liquid glass (" .. tostring(lg) .. "), dùng kính cổ điển.")
+		warn("[DynamicIsland] Không bật được GlassmorphicUI: " .. tostring(lg) .. ". Đang dùng kính cổ điển.")
 	end
 	self:_syncBodyFill()
 end
@@ -2954,7 +3029,7 @@ function Island:_lgFailed()
 	end
 end
 
--- false = kính cổ điển; true/bảng = bật engine mới (bảng = ghi đè LIQUID_DEFAULTS)
+-- false = kính cổ điển; true/bảng = bật engine GlassmorphicUI (bảng = ghi đè thuộc tính upstream)
 function Island:SetLiquid(opts)
 	if opts == false then
 		self._cfg.Liquid = false
