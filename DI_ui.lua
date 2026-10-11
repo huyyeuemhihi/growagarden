@@ -1,3 +1,93 @@
+--[[
+	DynamicIsland.lua  v5.1  -  Dynamic Island (iPhone 14 Pro) + LIQUID GLASS dựng lại theo bài
+	"Reproducing Liquid Glass in Roblox" của boatbomber (boatbomber.com/blog/liquid-glass)
+	-------------------------------------------------------------------------------
+	MỚI Ở v5.1 - kính trong suốt thật, không màu nền
+	• Liquid bật = thân đảo KHÔNG còn tô màu (BackgroundTransparency = 1), tắt tint màu activity, tắt lớp depth/viền cổ điển.
+	• Lens = frost thuần của backdrop (100% màu cảnh, không trộn màu nền), độ mờ đục chỉnh bằng Opacity (mặc định 0.8)
+	  nên che được cả nút CoreGui phía sau thay vì để lộ nét. BlurRadius mặc định 20. Veil = nâng sáng trắng rất nhẹ.
+	• GIỚI HẠN không vượt được: Roblox không cho đọc màn hình, nên "nền" trong kính là cảnh 3D dựng lại bằng raycast (không có
+	  ScreenGui/CoreGui, bóng đổ, texture). Opacity cao = che nền thật nhưng màu kính lệch theo xấp xỉ đó.
+
+	MỚI Ở v5 - lõi kính chân thật hơn (chỉ đổi phần tính ảnh, API giữ nguyên)
+	• Khúc xạ theo định luật Snell trên mặt vát lồi dạng squircle (z = (1-(1-s/T)^4)^(1/4)), thay cho đường cong
+	  bậc hai tự chế của v4: độ lệch cực đại ở sát mép rồi tắt trơn về 0 ở s = T (không nếp gấp).
+	• Tán sắc thật: mỗi kênh R/G/B dùng một chiết suất riêng (xanh dương cao hơn đỏ), không còn chỉ nhân hệ số.
+	• Lưới backdrop từ raycast được tái dựng bằng BICUBIC (Catmull-Rom) thay cho song tuyến -> hết vết ô vuông/kim cương.
+	• Lưới lấy mẫu KHÔNG đều: dày hơn ở sát mép (nơi khúc xạ mạnh), thưa ở giữa (chỉ còn frost). Chỉnh bằng SamplerWarp.
+	• Frost gaussian đúng nghĩa: 3 lượt box blur với bán kính tính theo "boxes for gauss" (v4 chỉ 2 lượt = tam giác).
+	• Thứ tự đúng như bài blog: khúc xạ -> frost -> tint; Fresnel + glare nằm ở ảnh RIM riêng, cộng SAU frost nên không bị blur.
+	• Thêm Saturation (nền đậm màu hơn nhẹ) và BevelShade (mặt vát sáng/tối theo nguồn sáng trên-trái).
+	• Lens gần full-res ở đảo nhỏ (v4 hạ xuống ~2px/pixel nên mép bị nhoè).
+	• Lưu ý đổi ngữ nghĩa: RefractionFactor giờ là chiết suất n (1 = tắt, ~1.5 = kính thật), mặc định 1.6.
+
+	MỚI Ở v4 - làm lại cách dựng kính
+	• Bỏ kiểu chồng frame/UIStroke giả. Kính giờ do hai ảnh EditableImage dựng bằng toán trên SDF bo góc:
+	    1) LENS: dịch điểm lấy mẫu backdrop theo độ sâu tới mép -> khúc xạ, tách kênh màu (chromatic aberration),
+	       rồi blur frosted (gaussian ~ 2 lần box blur), trộn với màu kính.
+	    2) RIM: viền Fresnel + glare (glint) tính từ khoảng cách tới mép và pháp tuyến, bake MỘT lần cho một góc,
+	       lật gương ra 4 góc, hiển thị bằng 9-slice -> luôn khớp đúng đường bo khi đảo co giãn (hết vệt sáng lệch).
+	• Backdrop: Roblox không cho đọc framebuffer, nên "dựng lại cảnh" bằng raycast lưới thưa (tối đa 28x14 điểm),
+	  chỗ trượt = màu trời theo mô hình ngày/đêm. Đây là xấp xỉ, không phải ảnh thật của màn hình.
+	• Hiệu năng: bán kính viền có cache (lượng tử 2px), lens chỉ dựng lại khi đảo đứng yên hoặc nền đổi,
+	  mọi việc chia nhỏ trong ngân sách Budget (ms/frame), tối đa 1 lần ghi EditableImage mỗi frame.
+	• Không có EditableImage (hoặc lỗi) -> tự quay về kính cổ điển của v3.
+
+	MỚI Ở v3: hết tràn viền (mọi lớp nằm TRONG thân CanvasGroup), vùng mờ nền thật (Part DepthOfField) thu vào Inset px.
+	MỚI Ở v2: spring kiểu SwiftUI, icon dùng chung (matched geometry), nội dung vào theo tầng, số/chữ "roll", kéo dây cao su.
+
+	CÁCH DÙNG (API giữ nguyên như v1-v3, thêm tuỳ chọn Liquid)
+	    local Island = loadstring(game:HttpGet("LINK_RAW_CUA_BAN"))()
+	    local GlassmorphicUI = require(game:GetService("ReplicatedStorage").Packages.GlassmorphicUI)
+	    local island = Island.new({
+	        GlassmorphicUI = GlassmorphicUI, -- dùng engine gốc từ repo boatbeaker
+	        Top = 11, Scale = nil,          -- Scale nil = tự co theo màn hình
+	        Style = "Frosted",              -- "Frosted" = kính xám mờ đục | "Dark" = kính đen kiểu iOS
+	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
+	                                        --   { NearIntensity = 1, Inset = 6, Slices = 8, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
+	        Liquid = true,                  -- engine kính mới; false = kính cổ điển v3; hoặc bảng tuỳ chỉnh (xem LIQUID_DEFAULTS):
+	                                        --   { Thickness = 16, RefractionFactor = 1.75, ChromaticAberration = 0.2, BlurRadius = 12,
+	                                        --     Saturation = 1.15, BevelShade = 0.1, SamplerWarp = 0.5,
+	                                        --     FresnelIntensity = 22, GlareIntensity = 45 (0 = tắt glint), Backdrop = true,
+	                                        --     BackdropHz = 5, Sky = { Top = Color3, Horizon = Color3 }, Budget = 3 }
+	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur và Liquid)
+	        Transparency = nil,             -- độ trong của thân kính cổ điển (nil = theo Style); bị bỏ qua khi Liquid bật
+	    })
+
+	    island:Notify({ Title = "Auto Farm", Text = "Đã bật Level Farm",
+	        Color = Island.Colors.Green, Duration = 3, Callback = function() end })
+
+	    island:SetActivity({ Title = "Auto Farm", Text = "Level Farm • Bandit",
+	        Color = Island.Colors.Green, Right = "Lv 120", Progress = 0.35,
+	        Buttons = {
+	            { Text = "Dừng", Style = "destructive", Callback = function() end },
+	            { Text = "Ẩn",   Style = "default",     Callback = function() island:Collapse() end },
+	        } })
+	    island:UpdateActivity({ Right = "Lv 121", Progress = 0.6 })
+	    island:Expand() / :Collapse() / :Toggle() / :ClearActivity()
+	    island:Hide() / :Show() / :SetGlass(true|false) / :SetBlur(true|false|{...}) / :SetTop(px) / :SetScale(s) / :Destroy()
+	    island:SetLiquid(false | true | { ... })   -- đổi engine/tham số kính khi đang chạy
+	    island:RefreshGlass()                       -- ép quét lại backdrop (vd. vừa teleport)
+
+	Bấm vào đảo (khi có Activity) = mở rộng / thu lại.  Vuốt lên = đóng.
+	Icon: Icon = "rbxassetid://123" (hoặc số id) hoặc Glyph = "⚡"; không có thì lấy chữ cái đầu của Title.
+	Chạy thử nhanh: getgenv().DynamicIslandDemo = true trước khi load file này.
+
+	GIỚI HẠN (nói thật)
+	• CHƯA kiểm chứng trong Roblox thật. Lõi toán v5 (SDF, bảng Snell, warp lưới, bicubic, blur, bake viền) đã chạy bằng
+	  Lua 5.4 với shim `buffer` và xuất ảnh để xem bằng mắt; phần gọi API Roblox (EditableImage, 9-slice, raycast) chỉ được
+	  kiểm tra cú pháp, chưa chạy. Nếu EditableImage bị chặn trên executor của bạn, đảo tự dùng kính cổ điển.
+	• Bài blog là trang JS nên mình chỉ đọc được đoạn trích (thứ tự khúc xạ -> frost -> fresnel/glare, SDF + superellipse,
+	  bicubic, lấy mẫu dày ở mép). Công thức cụ thể (Snell trên squircle, warp sin) là cách mình dựng theo mô tả đó,
+	  không phải mã gốc của tác giả. Tham số tinh chỉnh: RefractionFactor, Thickness, BevelHeight, BlurRadius.
+	• Cần client có AssetService:CreateEditableImage, EditableImage:WritePixelsBuffer và ImageLabel.ImageContent.
+	• Backdrop bằng raycast chỉ thấy vật thể 3D (màu Part, không texture/ánh sáng thật/skybox): đó là lý do màu kính
+	  là gần đúng. Không thấy được ScreenGui khác. Chỉnh Sky = {...} nếu màu trời lệch.
+	• Thân vẫn bị cắt bằng UICorner (bo tròn thường, không phải squircle liên tục của Apple) nên chưa dùng góc superellipse như blog.
+	• RealBlur (DepthOfField) vẫn giữ nguyên như v3 và vẫn có giới hạn cũ: chỉ mờ cảnh 3D, cần đồ hoạ >= 8,
+	  DOF có thể lem nhẹ ra ngoài viền (tăng Inset hoặc đặt RealBlur = false).
+]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -932,7 +1022,8 @@ local LIQUID_DEFAULTS = {
 	GlareIntensity = 55, -- 0..100 (0 = tắt hẳn phản chiếu/glint)
 	GlareConvergence = 90, -- 0..100: glint bám chặt góc chéo
 	Backdrop = true, -- lấy mẫu cảnh 3D bằng raycast (false = chỉ lấy một lần)
-	BackdropHz = 5, -- số lần quét lại backdrop mỗi giây
+	BackdropHz = 10, -- số lần quét lại backdrop mỗi giây khi ContinuousRender bật
+	ContinuousRender = true, -- luôn dựng lại lens khi có lượt quét backdrop hoàn tất
 	Sky = nil, -- { Top = Color3, Horizon = Color3 } nếu muốn ép màu trời
 	RimQuality = 2, -- siêu mẫu cho ảnh viền (1..3)
 	Budget = 3, -- ms tối đa mỗi frame cho việc dựng ảnh + raycast
@@ -1359,8 +1450,8 @@ function Liquid:_sample(now, dl)
 		self.sampledOnce = true
 		self.gridFresh = false
 		self.nextSample = now + 1 / max(self.P.BackdropHz or 5, 0.2)
-		if st.fresh or st.delta / (st.n * 3) > 0.004 then
-			self.lensDirty = true -- nền đổi đủ nhiều mới dựng lại lens (đứng yên = không tốn gì thêm)
+		if self.P.ContinuousRender or st.fresh or st.delta / (st.n * 3) > 0.004 then
+			self.lensDirty = true -- ContinuousRender: dựng lại lens sau mỗi lượt lấy mẫu nền
 		end
 	end
 end
@@ -1426,7 +1517,7 @@ function Liquid:_flush(w)
 end
 
 ----------------------------------------------------------------------
--- Mỗi Heartbeat: viền -> ghi tối đa 1 ảnh -> lấy mẫu -> lens, tất cả trong ngân sách ms
+-- Mỗi RenderStepped: viền -> ghi tối đa 1 ảnh -> lấy mẫu -> lens, tất cả trong ngân sách ms
 ----------------------------------------------------------------------
 function Liquid:Step()
 	if self.failed or self.destroyed or not self.enabled then
@@ -1971,9 +2062,9 @@ function Island:_connect()
 
 	table.insert(
 		self._conns,
-		RunService.Heartbeat:Connect(function()
+		RunService.RenderStepped:Connect(function()
 			local lg = self._lg
-			if lg then
+			if lg and not self._destroyed then
 				lg:SafeStep()
 			end
 		end)
