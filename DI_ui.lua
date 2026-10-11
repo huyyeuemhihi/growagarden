@@ -1,7 +1,14 @@
 --[[
-	DynamicIsland.lua  v2  -  Dynamic Island (iPhone 14 Pro) + Liquid Glass cho Roblox
+	DynamicIsland.lua  v3  -  Dynamic Island (iPhone 14 Pro) + Liquid Glass cho Roblox
 	-------------------------------------------------------------------------------
-	MỚI SO VỚI v1
+	MỚI Ở v3 (sửa tràn viền + kính chân thực hơn)
+	• HẾT TRÀN VIỀN: bỏ bóng đổ ngoài thân (12 lớp frame nở ra ~26px chính là quầng đen lem quanh viền). Viền sáng giờ
+	  là các lớp UIStroke nằm TRONG thân (CanvasGroup cắt đúng góc bo) nên không lớp nào vượt khỏi đường bo.
+	• Vùng mờ nền thật (Part DepthOfField) thu vào trong Inset px, lát góc tính theo mép ngoài của lát -> không lòi ra ngoài góc bo.
+	• Kính thật hơn: viền 4 lớp (sắc ở mép, mờ dần vào trong, sáng chéo theo góc), vệt phản chiếu 3 lớp mép mềm,
+	  quầng sáng ngón tay 16 vòng thay cho 4 vòng (hết lộ vành đồng tâm). Tuỳ chọn Shadow đã bỏ.
+
+	MỚI Ở v2 (so với v1)
 	• LIQUID GLASS: thân kính tối hơi trong suốt, viền sáng chéo (rim light) xoay theo trạng thái,
 	  vệt phản chiếu phía trên, chiều sâu kính dựng bằng nhiều lớp frame (giữa tối, mép sáng mờ), ánh màu của activity hắt lên kính,
 	  quầng sáng chạy theo ngón tay khi chạm, vệt sáng quét ngang mỗi lần đổi trạng thái, bóng đổ mềm dựng bằng nhiều lớp frame nhạt (không còn vòng viền cứng).
@@ -20,10 +27,9 @@
 	        Top = 11, Scale = nil,          -- Scale nil = tự co theo màn hình
 	        Style = "Frosted",              -- "Frosted" = kính xám mờ đục (kiểu Night Hub) | "Dark" = kính đen kiểu iOS
 	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
-	                                        --   { NearIntensity = 1, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
+	                                        --   { NearIntensity = 1, Inset = 6, Slices = 8, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
 	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur)
 	        Transparency = nil,             -- độ trong của kính (nil = theo Style)
-	        Shadow = nil,                   -- bóng đổ mềm (nil = theo Style: Frosted tắt, Dark bật)
 	    })
 
 	    island:Notify({ Title = "Auto Farm", Text = "Đã bật Level Farm",
@@ -48,6 +54,8 @@
 	  không mờ ScreenGui khác, cần đồ hoạ >= 8, và tốn thêm tài nguyên. Các thông số DepthOfField mình tính theo lý thuyết,
 	  CHƯA kiểm chứng trong Roblox: nếu mờ yếu/lệch thì chỉnh NearIntensity, Distance, FocusDistance trong RealBlur.
 	• UICorner là bo tròn thường, không phải squircle liên tục (continuous corner) của Apple.
+	• DepthOfField có thể lem mờ ra ngoài vật thể một chút. Inset đã thu Part vào trong; nếu vẫn thấy lem ra ngoài viền thì
+	  tăng Inset, giảm NearIntensity, hoặc đặt RealBlur = false.
 ]]
 
 local Players = game:GetService("Players")
@@ -111,8 +119,8 @@ local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
 -- Hai phong cách kính. Frosted = kính xám mờ đục như Night Hub (nên đi cùng RealBlur), Dark = kính đen như iOS
 local STYLES = {
-	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.4, depthAlpha = 0.035, sheenTop = 0.84, shadow = false },
-	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.9, shadow = true },
+	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.4, depthAlpha = 0.035, sheenTop = 0.84 },
+	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.9 },
 }
 -- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
 local BLUR_DEFAULTS = {
@@ -121,11 +129,22 @@ local BLUR_DEFAULTS = {
 	FocusDistance = nil, -- nil = Distance * 2
 	InFocusRadius = 100,
 	NearIntensity = 1, -- độ mờ (0..1)
-	Slices = 4, -- số lát mỗi bên để xấp xỉ góc bo
+	Slices = 8, -- số lát mỗi bên để xấp xỉ góc bo
+	Inset = 6, -- thu vùng mờ vào trong px để phần mờ lem ra không vượt khỏi viền kính
 }
--- Bóng + chiều sâu kính dựng bằng NHIỀU lớp frame đặc, mỗi lớp rất nhạt (thay cho UIStroke dày bị lộ vòng)
-local SHADOW_N, SHADOW_STEP, SHADOW_ALPHA = 12, 2.2, 0.03 -- 12 lớp, mỗi lớp nở thêm 2.2px, đậm 3%
-local DEPTH_N, DEPTH_STEP = 8, 2 -- 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
+-- Quầng sáng theo ngón tay: GLOW_N vòng tròn rất nhạt chồng nhau, vòng lớn nhất = GLOW_D (khớp khung Glow 170px)
+local GLOW_N, GLOW_D, GLOW_A = 16, 170, 0.0157
+-- Viền kính: mỗi lớp là một UIStroke bám mép và dày vào TRONG thân. t = bề dày (px), lo = độ trong ở chỗ sáng nhất, mid = ở chỗ tối nhất.
+-- Chồng 4 lớp -> mép sáng sắc rồi mờ dần vào trong (giống độ dày của kính). Không còn bóng đổ/viền nào nằm ngoài thân.
+local EDGE_LAYERS = {
+	{ t = 1.1, lo = 0.28, mid = 0.90 },
+	{ t = 2.6, lo = 0.80, mid = 0.97 },
+	{ t = 5, lo = 0.90, mid = 0.99 },
+	{ t = 8.5, lo = 0.95, mid = 1 },
+}
+-- Vệt phản chiếu phía trên: 3 lớp thu hẹp dần (inset nhân với độ bo, h = tỉ lệ chiều cao thân)
+local SPEC_LAYERS = { { inset = 1.0, h = 0.46 }, { inset = 1.7, h = 0.36 }, { inset = 2.5, h = 0.26 } }
+local DEPTH_N, DEPTH_STEP = 8, 2 -- chiều sâu kính: 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
 
 ----------------------------------------------------------------------
 -- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
@@ -510,7 +529,6 @@ function Island.new(config)
 		Intro = config.Intro ~= false,
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
-		Shadow = config.Shadow == nil and style.shadow or config.Shadow,
 		Transparency = config.Transparency or style.transparency,
 	}
 	self._glass = self._cfg.Glass
@@ -518,7 +536,6 @@ function Island.new(config)
 	self._queue = {}
 	self._layers = {}
 	self._glassItems = {}
-	self._shadows = {}
 	self._shown = nil
 	self._layerToken = 0
 	self._iconToken = 0
@@ -579,7 +596,7 @@ function Island:_build()
 	self._holder = holder
 	self._scale = mk("UIScale", { Scale = self:_autoScale() }, holder)
 
-	-- Shell: khung kích thước đảo (không cắt), chứa bóng + thân + viền sáng
+	-- Shell: khung kích thước đảo (không cắt), chứa thân (viền sáng nằm trong thân)
 	local shell = mk("Frame", {
 		Name = "Shell",
 		AnchorPoint = Vector2.new(0.5, 0),
@@ -602,23 +619,6 @@ function Island:_build()
 		Size = UDim2.new(1, 16, 1, 16),
 		ZIndex = 0,
 	}, shell)
-
-	-- Bóng đổ mềm: lặp N frame đặc, lớp sau lớn hơn lớp trước một chút, mỗi lớp chỉ đậm ~3%.
-	-- Chồng lên nhau thành dải chuyển mờ mượt (không còn vòng viền cứng như UIStroke dày).
-	for i = 1, SHADOW_N do
-		local f = mk("Frame", {
-			BackgroundColor3 = BLACK,
-			BackgroundTransparency = 1 - SHADOW_ALPHA,
-			BorderSizePixel = 0,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0.5, 5),
-			Size = UDim2.new(1, 2 * i * SHADOW_STEP, 1, 2 * i * SHADOW_STEP),
-			ZIndex = 0,
-			Visible = self._cfg.Shadow,
-		}, shell)
-		local c = mk("UICorner", {}, f)
-		table.insert(self._shadows, { frame = f, corner = c, grow = i * SHADOW_STEP })
-	end
 
 	-- Thân đảo: CanvasGroup để nội dung bị cắt đúng theo góc bo
 	local body = mk("CanvasGroup", {
@@ -668,30 +668,36 @@ function Island:_build()
 		GroupTransparency = 1,
 		ZIndex = 1,
 	}, body))
-	for _, d in ipairs({ { 170, 0.975 }, { 118, 0.96 }, { 70, 0.95 }, { 34, 0.94 } }) do
+	-- 16 vòng tròn rất nhạt chồng nhau -> chuyển mờ mượt như radial gradient (trước chỉ 4 vòng nên lộ vành đồng tâm)
+	for i = 1, GLOW_N do
+		local d = GLOW_D * (1 - 0.94 * (i - 1) / GLOW_N)
 		local circle = mk("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(d[1], d[1]),
+			Size = UDim2.fromOffset(d, d),
 			BackgroundColor3 = WHITE,
-			BackgroundTransparency = d[2],
+			BackgroundTransparency = 1 - GLOW_A,
 			BorderSizePixel = 0,
 		}, glow)
 		mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, circle)
 	end
 	self._glow = glow
 
-	-- 4) Vệt phản chiếu cong ở nửa trên (specular)
-	self._spec = glassItem(mk("Frame", {
-		Name = "Specular",
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 1.5),
-		BackgroundColor3 = WHITE,
-		BorderSizePixel = 0,
-		ZIndex = 1,
-	}, body))
-	self._specCorner = mk("UICorner", {}, self._spec)
-	addGradient(self._spec, 90, { { 0, 0.82 }, { 0.6, 0.98 }, { 1, 1 } })
+	-- 4) Vệt phản chiếu ở nửa trên (specular): 3 lớp thu hẹp dần để hai bên mờ mượt, không lộ khung chữ nhật bo
+	self._specs = {}
+	for i, L in ipairs(SPEC_LAYERS) do
+		local f = glassItem(mk("Frame", {
+			Name = "Specular" .. i,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 2),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, body))
+		local c = mk("UICorner", {}, f)
+		addGradient(f, 90, { { 0, 0.93 }, { 0.45, 0.985 }, { 1, 1 } })
+		table.insert(self._specs, { frame = f, corner = c, inset = L.inset, h = L.h })
+	end
 
 	-- 5) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
 	self._depth = {}
@@ -721,18 +727,26 @@ function Island:_build()
 	self._glintGrad = addGradient(self._glint, 20, { { 0, 1 }, { 0.4, 1 }, { 0.5, 0.82 }, { 0.6, 1 }, { 1, 1 } })
 	self._glintGrad.Offset = Vector2.new(-1, 0)
 
-	-- Viền sáng (rim light) bao ngoài thân
-	self._rim = glassItem(mk("Frame", {
-		Name = "Rim",
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Size = UDim2.fromScale(1, 1),
-		ZIndex = 2,
-	}, shell))
-	self._rimCorner = mk("UICorner", {}, self._rim)
-	self._rimT = 1
-	self._rimStroke = mk("UIStroke", { Color = WHITE, Thickness = self._rimT, Transparency = 0 }, self._rim)
-	self._rimGrad = addGradient(self._rimStroke, RIM_ANGLE.idle, { { 0, 0.3 }, { 0.2, 0.82 }, { 0.5, 0.95 }, { 0.8, 0.82 }, { 1, 0.3 } })
+	-- Viền kính (rim light): chồng nhiều UIStroke bám mép và dày vào trong -> sắc ở mép, mờ dần vào trong như độ dày của kính.
+	-- Nằm TRONG body (CanvasGroup) nên bị cắt đúng đường bo, không thể tràn ra ngoài.
+	self._edges = {}
+	for i, L in ipairs(EDGE_LAYERS) do
+		local f = mk("Frame", {
+			Name = "Edge" .. i,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, -2 * L.t, 1, -2 * L.t),
+			ZIndex = 5,
+			Visible = glass,
+		}, body)
+		local c = mk("UICorner", {}, f)
+		local s = mk("UIStroke", { Color = WHITE, Thickness = L.t, Transparency = 0 }, f)
+		local near = L.lo + (L.mid - L.lo) * 0.8
+		local g = addGradient(s, RIM_ANGLE.idle, { { 0, L.lo }, { 0.2, near }, { 0.5, L.mid }, { 0.8, near }, { 1, L.lo } })
+		table.insert(self._edges, { frame = f, corner = c, stroke = s, grad = g, t = L.t })
+	end
 
 	-- Layer Activity (compact): chỉ còn chữ bên phải (icon là icon dùng chung)
 	local act = newLayer(body, "Activity")
@@ -784,16 +798,23 @@ function Island:_apply()
 	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
 	self._bodyCorner.CornerRadius = UDim.new(0, r)
 
-	local k = math.clamp(h / 16, 0, 1) -- viền/bóng mỏng dần khi đảo thu về 0
-	for _, sh in ipairs(self._shadows) do
-		sh.corner.CornerRadius = UDim.new(0, r + sh.grow * k)
+	local k = math.clamp(h / 16, 0, 1) -- viền mỏng dần khi đảo thu về 0
+	-- Viền kính: mỗi lớp là UIStroke dày VÀO TRONG thân (khung thụt t, stroke dày t nằm ngoài khung thụt = đúng mép thân)
+	for _, e in ipairs(self._edges) do
+		local t = math.min(e.t * k, h / 2 - 0.5, w / 2 - 0.5)
+		local on = self._glass and t > 0.2
+		e.frame.Visible = on
+		if on then
+			e.frame.Size = UDim2.new(1, -2 * t, 1, -2 * t)
+			e.corner.CornerRadius = UDim.new(0, math.max(r - t, 0))
+			e.stroke.Thickness = t
+		end
 	end
-
 	if self._glass then
-		self._rimCorner.CornerRadius = UDim.new(0, r)
-		self._rimStroke.Thickness = self._rimT * k
-		self._spec.Size = UDim2.new(1, -r * 0.8, 0, h * 0.5)
-		self._specCorner.CornerRadius = UDim.new(0, math.max(r * 0.75, 2))
+		for _, sl in ipairs(self._specs) do
+			sl.frame.Size = UDim2.new(1, -r * sl.inset, 0, h * sl.h)
+			sl.corner.CornerRadius = UDim.new(0, math.max(r * 0.6, 2))
+		end
 	end
 	for _, d in ipairs(self._depth) do
 		local fits = self._glass and (h - 2 * d.inset) > 2 and (w - 2 * d.inset) > 2
@@ -1189,7 +1210,9 @@ function Island:_glassTransition(state)
 	self._glintGrad.Offset = Vector2.new(-1, 0)
 	tween(self._glintGrad, 0.95, { Offset = Vector2.new(1, 0) }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 	local ang = RIM_ANGLE[state] or 40
-	tween(self._rimGrad, 0.9, { Rotation = ang }, Enum.EasingStyle.Quint)
+	for _, e in ipairs(self._edges) do
+		tween(e.grad, 0.9, { Rotation = ang }, Enum.EasingStyle.Quint)
+	end
 end
 
 function Island:_render(instant)
@@ -1441,24 +1464,26 @@ function Island:_blurStep()
 	if changed then
 		self._blurKey = { x = ap.X, y = ap.Y, w = as.X, h = as.Y, r = rpx, vx = V.X, vy = V.Y, fov = fov, d = d }
 		local s = (2 * d * math.tan(math.rad(fov) / 2)) / V.Y -- studs trên mỗi pixel tại khoảng cách d
-		local w, h = as.X, as.Y
-		local r = math.min(rpx, w / 2, h / 2)
+		local ins = math.min(b.Inset or 0, as.X / 4, as.Y / 4) -- thu Part vào trong để vùng mờ (kể cả phần lem ra) nằm gọn dưới viền kính
+		local w, h = as.X - 2 * ins, as.Y - 2 * ins
+		local r = math.max(math.min(rpx - ins, w / 2, h / 2), 0)
 		local K = b.Slices
-		local cy = ap.Y + h / 2
+		local cx, cy = ap.X + as.X / 2, ap.Y + as.Y / 2
 		local parts = self._blurParts
-		local function place(i, cx, cyy, pw, ph)
+		local function place(i, px, py, pw, ph)
 			local e = parts[i]
 			e.part.Size = Vector3.new(math.max(pw * s, 0.001), math.max(ph * s, 0.001), 0.005)
-			e.cf = CFrame.new((cx - V.X / 2) * s, -(cyy - V.Y / 2) * s, -d)
+			e.cf = CFrame.new((px - V.X / 2) * s, -(py - V.Y / 2) * s, -d)
 		end
-		place(1, ap.X + w / 2, cy, w - 2 * r, h)
+		place(1, cx, cy, w - 2 * r, h)
 		for j = 1, K do
 			local xc = (j - 0.5) * r / K
-			local dx = r - xc
+			-- độ thụt theo MÉP NGOÀI của lát (không phải tâm lát) -> lát không bao giờ lòi ra khỏi đường bo góc
+			local dx = r - (j - 1) * r / K
 			local inset = r - math.sqrt(math.max(r * r - dx * dx, 0))
 			local sh = h - 2 * inset
-			place(1 + j, ap.X + xc, cy, r / K + 0.5, sh)
-			place(1 + K + j, ap.X + w - xc, cy, r / K + 0.5, sh)
+			place(1 + j, ap.X + ins + xc, cy, r / K + 0.3, sh)
+			place(1 + K + j, ap.X + as.X - ins - xc, cy, r / K + 0.3, sh)
 		end
 	end
 
