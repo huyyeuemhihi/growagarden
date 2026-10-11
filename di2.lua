@@ -1,7 +1,19 @@
 --[[
-	DynamicIsland.lua  v4  -  Dynamic Island (iPhone 14 Pro) + LIQUID GLASS dựng lại theo bài
+	DynamicIsland.lua  v5  -  Dynamic Island (iPhone 14 Pro) + LIQUID GLASS dựng lại theo bài
 	"Reproducing Liquid Glass in Roblox" của boatbomber (boatbomber.com/blog/liquid-glass)
 	-------------------------------------------------------------------------------
+	MỚI Ở v5 - lõi kính chân thật hơn (chỉ đổi phần tính ảnh, API giữ nguyên)
+	• Khúc xạ theo định luật Snell trên mặt vát lồi dạng squircle (z = (1-(1-s/T)^4)^(1/4)), thay cho đường cong
+	  bậc hai tự chế của v4: độ lệch cực đại ở sát mép rồi tắt trơn về 0 ở s = T (không nếp gấp).
+	• Tán sắc thật: mỗi kênh R/G/B dùng một chiết suất riêng (xanh dương cao hơn đỏ), không còn chỉ nhân hệ số.
+	• Lưới backdrop từ raycast được tái dựng bằng BICUBIC (Catmull-Rom) thay cho song tuyến -> hết vết ô vuông/kim cương.
+	• Lưới lấy mẫu KHÔNG đều: dày hơn ở sát mép (nơi khúc xạ mạnh), thưa ở giữa (chỉ còn frost). Chỉnh bằng SamplerWarp.
+	• Frost gaussian đúng nghĩa: 3 lượt box blur với bán kính tính theo "boxes for gauss" (v4 chỉ 2 lượt = tam giác).
+	• Thứ tự đúng như bài blog: khúc xạ -> frost -> tint; Fresnel + glare nằm ở ảnh RIM riêng, cộng SAU frost nên không bị blur.
+	• Thêm Saturation (nền đậm màu hơn nhẹ) và BevelShade (mặt vát sáng/tối theo nguồn sáng trên-trái).
+	• Lens gần full-res ở đảo nhỏ (v4 hạ xuống ~2px/pixel nên mép bị nhoè).
+	• Lưu ý đổi ngữ nghĩa: RefractionFactor giờ là chiết suất n (1 = tắt, ~1.5 = kính thật), mặc định 1.6.
+
 	MỚI Ở v4 - làm lại cách dựng kính
 	• Bỏ kiểu chồng frame/UIStroke giả. Kính giờ do hai ảnh EditableImage dựng bằng toán trên SDF bo góc:
 	    1) LENS: dịch điểm lấy mẫu backdrop theo độ sâu tới mép -> khúc xạ, tách kênh màu (chromatic aberration),
@@ -25,7 +37,8 @@
 	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
 	                                        --   { NearIntensity = 1, Inset = 6, Slices = 8, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
 	        Liquid = true,                  -- engine kính mới; false = kính cổ điển v3; hoặc bảng tuỳ chỉnh (xem LIQUID_DEFAULTS):
-	                                        --   { Thickness = 14, RefractionFactor = 2.1, ChromaticAberration = 0.2, BlurRadius = 14,
+	                                        --   { Thickness = 16, RefractionFactor = 1.6, ChromaticAberration = 0.2, BlurRadius = 12,
+	                                        --     Saturation = 1.15, BevelShade = 0.1, SamplerWarp = 0.5,
 	                                        --     FresnelIntensity = 22, GlareIntensity = 45 (0 = tắt glint), Backdrop = true,
 	                                        --     BackdropHz = 5, Sky = { Top = Color3, Horizon = Color3 }, Budget = 3 }
 	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur và Liquid)
@@ -52,13 +65,16 @@
 	Chạy thử nhanh: getgenv().DynamicIslandDemo = true trước khi load file này.
 
 	GIỚI HẠN (nói thật)
-	• CHƯA kiểm chứng trong Roblox thật. Phần toán (SDF, khúc xạ, blur, bake viền, chia việc theo coroutine) đã chạy thử
-	  bằng Lua 5.4 và so khớp từng byte với bản tham chiếu độc lập; phần gọi API Roblox (EditableImage, 9-slice, raycast)
-	  chạy thử trên môi trường giả. Nếu EditableImage bị chặn trên executor của bạn, đảo tự dùng kính cổ điển.
+	• CHƯA kiểm chứng trong Roblox thật. Lõi toán v5 (SDF, bảng Snell, warp lưới, bicubic, blur, bake viền) đã chạy bằng
+	  Lua 5.4 với shim `buffer` và xuất ảnh để xem bằng mắt; phần gọi API Roblox (EditableImage, 9-slice, raycast) chỉ được
+	  kiểm tra cú pháp, chưa chạy. Nếu EditableImage bị chặn trên executor của bạn, đảo tự dùng kính cổ điển.
+	• Bài blog là trang JS nên mình chỉ đọc được đoạn trích (thứ tự khúc xạ -> frost -> fresnel/glare, SDF + superellipse,
+	  bicubic, lấy mẫu dày ở mép). Công thức cụ thể (Snell trên squircle, warp sin) là cách mình dựng theo mô tả đó,
+	  không phải mã gốc của tác giả. Tham số tinh chỉnh: RefractionFactor, Thickness, BevelHeight, BlurRadius.
 	• Cần client có AssetService:CreateEditableImage, EditableImage:WritePixelsBuffer và ImageLabel.ImageContent.
 	• Backdrop bằng raycast chỉ thấy vật thể 3D (màu Part, không texture/ánh sáng thật/skybox): đó là lý do màu kính
 	  là gần đúng. Không thấy được ScreenGui khác. Chỉnh Sky = {...} nếu màu trời lệch.
-	• Thân vẫn bị cắt bằng UICorner (bo tròn thường, không phải squircle liên tục của Apple).
+	• Thân vẫn bị cắt bằng UICorner (bo tròn thường, không phải squircle liên tục của Apple) nên chưa dùng góc superellipse như blog.
 	• RealBlur (DepthOfField) vẫn giữ nguyên như v3 và vẫn có giới hạn cũ: chỉ mờ cảnh 3D, cần đồ hoạ >= 8,
 	  DOF có thể lem nhẹ ra ngoài viền (tăng Inset hoặc đặt RealBlur = false).
 ]]
@@ -631,8 +647,59 @@ local function bakeRim(rq, q, P, step)
 	return buf, S, Cq
 end
 
--- Nội suy song tuyến trên lưới backdrop (gw x gh, mảng phẳng 1-based)
-local function bil1(arr, gw, gh, gx, gy)
+-- Lưới backdrop KHÔNG đều: ô dày hơn ở sát mép (nơi khúc xạ mạnh), thưa ở giữa (nơi chỉ còn frost).
+-- x/len = u - beta*sin(2*pi*u)/(2*pi); beta = 0 là lưới đều, beta < 1 để hàm đơn điệu.
+local PI2 = 2 * math.pi
+local function warp01(u, beta)
+	return u - beta * math.sin(PI2 * u) / PI2
+end
+
+-- Bảng nghịch đảo: vị trí px (0..len) -> chỉ số ô thập phân trên lưới n ô (đã warp). lut[p + 1] ứng với x = p.
+local function buildInv(len, n, beta)
+	local pos = {}
+	for i = 0, n - 1 do
+		pos[i] = len * warp01((i + 0.5) / n, beta)
+	end
+	local size = ceil(len) + 2
+	local lut = {}
+	local k = 0
+	for p = 0, size do
+		while k < n - 2 and p >= pos[k + 1] do
+			k = k + 1
+		end
+		local g
+		if p <= pos[0] then
+			g = 0
+		elseif p >= pos[n - 1] then
+			g = n - 1
+		else
+			g = k + (p - pos[k]) / (pos[k + 1] - pos[k])
+		end
+		lut[p + 1] = g
+	end
+	return lut
+end
+
+local function lutGet(lut, x)
+	if x < 0 then
+		x = 0
+	end
+	local p = floor(x)
+	local f = x - p
+	local a = lut[p + 1]
+	local b = lut[p + 2] or a
+	return a + (b - a) * f
+end
+
+-- Catmull-Rom: trọng số 4 điểm lân cận (tái dựng bicubic cho lưới nguồn thưa)
+local function crw(t)
+	local t2 = t * t
+	local t3 = t2 * t
+	return (-t3 + 2 * t2 - t) * 0.5, (3 * t3 - 5 * t2 + 2) * 0.5, (-3 * t3 + 4 * t2 + t) * 0.5, (t3 - t2) * 0.5
+end
+
+-- Nội suy bicubic một kênh trên lưới gw x gh (mảng phẳng 1-based), kẹp mép
+local function bic1(arr, gw, gh, gx, gy)
 	if gx < 0 then
 		gx = 0
 	elseif gx > gw - 1 then
@@ -644,51 +711,104 @@ local function bil1(arr, gw, gh, gx, gy)
 		gy = gh - 1
 	end
 	local x0, y0 = floor(gx), floor(gy)
-	local fx, fy = gx - x0, gy - y0
-	local x1 = x0 + 1
-	if x1 > gw - 1 then
-		x1 = gw - 1
+	local a0, a1, a2, a3 = crw(gx - x0)
+	local b0, b1, b2, b3 = crw(gy - y0)
+	local xm, xp, xq = x0 - 1, x0 + 1, x0 + 2
+	if xm < 0 then
+		xm = 0
 	end
-	local y1 = y0 + 1
-	if y1 > gh - 1 then
-		y1 = gh - 1
+	if xp > gw - 1 then
+		xp = gw - 1
 	end
-	local a = arr[y0 * gw + x0 + 1] * (1 - fx) + arr[y0 * gw + x1 + 1] * fx
-	local b = arr[y1 * gw + x0 + 1] * (1 - fx) + arr[y1 * gw + x1 + 1] * fx
-	return a * (1 - fy) + b * fy
+	if xq > gw - 1 then
+		xq = gw - 1
+	end
+	local ym, yp, yq = y0 - 1, y0 + 1, y0 + 2
+	if ym < 0 then
+		ym = 0
+	end
+	if yp > gh - 1 then
+		yp = gh - 1
+	end
+	if yq > gh - 1 then
+		yq = gh - 1
+	end
+	local o = ym * gw + 1
+	local r0 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = y0 * gw + 1
+	local r1 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = yp * gw + 1
+	local r2 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = yq * gw + 1
+	local r3 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	return r0 * b0 + r1 * b1 + r2 * b2 + r3 * b3
 end
 
-local function bil3(gr, gg, gb, gw, gh, gx, gy)
-	if gx < 0 then
-		gx = 0
-	elseif gx > gw - 1 then
-		gx = gw - 1
+-- Bảng độ lệch khúc xạ theo độ sâu s (0..T) bằng định luật Snell trên mặt vát lồi (squircle):
+--   cao độ z(s) = bevel * (1 - (1 - s/T)^4)^(1/4)  (0 ở mép, bevel ở mặt phẳng giữa)
+--   tia thẳng đứng vào kính, góc tới = atan(dz/ds), gãy theo n = ior, rồi đi tiếp qua bề dày (z + base) tới nền.
+-- Trả về mảng D[1..N+1] (px) ứng với s = k*T/N. Trơn về 0 tại s = T (không có nếp gấp).
+local function refractTable(T, ior, bevel, base, N)
+	local D = {}
+	if ior <= 1.0001 then
+		for k = 0, N do
+			D[k + 1] = 0
+		end
+		return D
 	end
-	if gy < 0 then
-		gy = 0
-	elseif gy > gh - 1 then
-		gy = gh - 1
+	for k = 0, N do
+		local x = k / N
+		if x < 0.25 / N then
+			x = 0.25 / N -- độ dốc vô hạn ở đúng mép: lấy mẫu nhích vào một chút
+		end
+		local om = 1 - x
+		local p4 = om * om * om * om
+		local h = (1 - p4) ^ 0.25
+		local dh = om * om * om * (1 - p4) ^ -0.75
+		local slope = bevel / T * dh
+		local th1 = math.atan(slope)
+		local s2 = math.sin(th1) / ior
+		if s2 > 1 then
+			s2 = 1
+		end
+		local th2 = math.asin(s2)
+		D[k + 1] = (bevel * h + base) * math.tan(th1 - th2)
 	end
-	local x0, y0 = floor(gx), floor(gy)
-	local fx, fy = gx - x0, gy - y0
-	local x1 = x0 + 1
-	if x1 > gw - 1 then
-		x1 = gw - 1
-	end
-	local y1 = y0 + 1
-	if y1 > gh - 1 then
-		y1 = gh - 1
-	end
-	local i00, i10 = y0 * gw + x0 + 1, y0 * gw + x1 + 1
-	local i01, i11 = y1 * gw + x0 + 1, y1 * gw + x1 + 1
-	local w00, w10 = (1 - fx) * (1 - fy), fx * (1 - fy)
-	local w01, w11 = (1 - fx) * fy, fx * fy
-	return gr[i00] * w00 + gr[i10] * w10 + gr[i01] * w01 + gr[i11] * w11,
-		gg[i00] * w00 + gg[i10] * w10 + gg[i01] * w01 + gg[i11] * w11,
-		gb[i00] * w00 + gb[i10] * w10 + gb[i01] * w01 + gb[i11] * w11
+	return D
 end
 
--- Box blur một trục có kẹp mép (chạy 2 lần mỗi trục ~ gaussian)
+local function tabGet(D, N, u) -- u = s / T trong 0..1
+	local f = u * N
+	local k = floor(f)
+	if k >= N then
+		return D[N + 1]
+	end
+	local t = f - k
+	return D[k + 1] + (D[k + 2] - D[k + 1]) * t
+end
+
+-- 3 lần box blur xấp xỉ gaussian(sigma): trả về bán kính từng lượt (thuật toán "boxes for gauss")
+local function gaussBoxRadii(sigma)
+	local n = 3
+	local wIdeal = sqrt(12 * sigma * sigma / n + 1)
+	local wl = floor(wIdeal)
+	if wl % 2 == 0 then
+		wl = wl - 1
+	end
+	if wl < 1 then
+		wl = 1
+	end
+	local wu = wl + 2
+	local m = floor((12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4) + 0.5)
+	local out = {}
+	for i = 1, n do
+		local size = (i <= m) and wl or wu
+		out[i] = (size - 1) // 2
+	end
+	return out
+end
+
+-- Box blur một trục có kẹp mép
 local function blurAxis(src, dst, lines, len, rad, stepA, stepB, step)
 	local inv = 1 / (2 * rad + 1)
 	local last = len - 1
@@ -717,8 +837,11 @@ local function blurAxis(src, dst, lines, len, rad, stepA, stepB, step)
 	end
 end
 
--- Dựng lại pixel cho ảnh "lens": SDF bo góc -> độ sâu/pháp tuyến -> dịch điểm lấy mẫu (khúc xạ + tán sắc)
--- -> blur frosted -> trộn màu kính. Trả về buffer RGBA8 cỡ LW*LH.
+-- Dựng pixel cho ảnh "lens", đúng thứ tự bài blog:
+--   SDF bo góc -> độ sâu + pháp tuyến -> khúc xạ Snell (+ tán sắc: mỗi kênh một chiết suất)
+--   -> tái dựng bicubic từ lưới nguồn không đều -> frost gaussian -> tint.
+-- (Fresnel + glare nằm ở ảnh RIM riêng, cộng SAU frost nên không bị blur.)
+-- Trả về buffer RGBA8 cỡ LW*LH.
 local function renderLens(P, step)
 	local W, H, r = P.W, P.H, P.R
 	local LW, LH = max(2, ceil(W / P.ds)), max(2, ceil(H / P.ds))
@@ -727,16 +850,30 @@ local function renderLens(P, step)
 	if T < 1 then
 		T = 0
 	end
-	local A, ca = P.A, P.ca
 	local gw, gh = P.gw, P.gh
 	local gr, gg, gb = P.gr, P.gg, P.gb
+	local beta = P.warp or 0
+	local lutX, lutY = buildInv(W, gw, beta), buildInv(H, gh, beta)
 	local N = LW * LH
-	local R, G, B, Sd = newArray(N, 0), newArray(N, 0), newArray(N, 0), newArray(N, 0)
+	local R, G, B, Sd, Sh = newArray(N, 0), newArray(N, 0), newArray(N, 0), newArray(N, 0), newArray(N, 1)
 	local hx, hy = W / 2, H / 2
 	local ex, ey = hx - r, hy - r
-	local invW, invH = gw / W, gh / H
-	local mR, mB = 1 + ca, 1 - ca
 	local maxX, maxY = W - 0.5, H - 0.5
+
+	-- chiết suất mỗi kênh: đỏ thấp nhất, xanh dương cao nhất (tán sắc thật)
+	local ior = clampN(P.ior, 1, 4)
+	local disp = clampN(P.ca, 0, 1) * 0.12 * ior
+	local TN = 48
+	local bevel = (P.bevel or 1) * T
+	local base = (P.glassBase or 0.45) * T
+	local DR, DG, DB
+	if T > 0 then
+		DR = refractTable(T, max(1, ior - disp), bevel, base, TN)
+		DG = refractTable(T, ior, bevel, base, TN)
+		DB = refractTable(T, ior + disp, bevel, base, TN)
+	end
+	local shadeK = P.shade or 0
+	local lx, ly = -0.55, -0.835 -- hướng về nguồn sáng (trên-trái)
 
 	for y = 0, LH - 1 do
 		local py = (y + 0.5) * dsy
@@ -759,7 +896,7 @@ local function renderLens(P, step)
 			end
 			local idx = y * LW + x + 1
 			Sd[idx] = s
-			if T > 0 and A > 0 and s < T then
+			if T > 0 and s < T and DG then
 				local nx, ny -- pháp tuyến hướng RA NGOÀI
 				if dc > 1e-6 then
 					nx, ny = ax / dc, ay / dc
@@ -774,22 +911,27 @@ local function renderLens(P, step)
 				else
 					nx, ny = 0, (dy < 0) and -1 or 1
 				end
-				local om = 1 - s / T
-				local D = A * T * om * om -- mép lấy mẫu sâu hơn vào trong; trơn về 0 tại s = T
-				local sx, sy = px - nx * D * mR, py - ny * D * mR
+				local u = s / T
+				local dR, dG, dB = tabGet(DR, TN, u), tabGet(DG, TN, u), tabGet(DB, TN, u)
+				local sx, sy = px - nx * dR, py - ny * dR
 				sx = sx < 0.5 and 0.5 or (sx > maxX and maxX or sx)
 				sy = sy < 0.5 and 0.5 or (sy > maxY and maxY or sy)
-				R[idx] = bil1(gr, gw, gh, sx * invW - 0.5, sy * invH - 0.5)
-				sx, sy = px - nx * D, py - ny * D
+				R[idx] = bic1(gr, gw, gh, lutGet(lutX, sx), lutGet(lutY, sy))
+				sx, sy = px - nx * dG, py - ny * dG
 				sx = sx < 0.5 and 0.5 or (sx > maxX and maxX or sx)
 				sy = sy < 0.5 and 0.5 or (sy > maxY and maxY or sy)
-				G[idx] = bil1(gg, gw, gh, sx * invW - 0.5, sy * invH - 0.5)
-				sx, sy = px - nx * D * mB, py - ny * D * mB
+				G[idx] = bic1(gg, gw, gh, lutGet(lutX, sx), lutGet(lutY, sy))
+				sx, sy = px - nx * dB, py - ny * dB
 				sx = sx < 0.5 and 0.5 or (sx > maxX and maxX or sx)
 				sy = sy < 0.5 and 0.5 or (sy > maxY and maxY or sy)
-				B[idx] = bil1(gb, gw, gh, sx * invW - 0.5, sy * invH - 0.5)
+				B[idx] = bic1(gb, gw, gh, lutGet(lutX, sx), lutGet(lutY, sy))
+				if shadeK ~= 0 then
+					local om = 1 - u
+					Sh[idx] = 1 + shadeK * (nx * lx + ny * ly) * om * sqrt(om)
+				end
 			else
-				R[idx], G[idx], B[idx] = bil3(gr, gg, gb, gw, gh, px * invW - 0.5, py * invH - 0.5)
+				local gx, gy = lutGet(lutX, px), lutGet(lutY, py)
+				R[idx], G[idx], B[idx] = bic1(gr, gw, gh, gx, gy), bic1(gg, gw, gh, gx, gy), bic1(gb, gw, gh, gx, gy)
 			end
 		end
 		if step then
@@ -797,13 +939,16 @@ local function renderLens(P, step)
 		end
 	end
 
-	local rad = P.blurW
-	if rad and rad >= 1 then
+	-- frost gaussian (3 lượt box mỗi trục)
+	local radii = P.blurRadii
+	if radii then
 		local tmp = newArray(N, 0)
 		for _, ch in ipairs({ R, G, B }) do
-			for _ = 1, 2 do
-				blurAxis(ch, tmp, LH, LW, rad, 1, LW, step)
-				blurAxis(tmp, ch, LW, LH, rad, LW, 1, step)
+			for _, rad in ipairs(radii) do
+				if rad >= 1 then
+					blurAxis(ch, tmp, LH, LW, rad, 1, LW, step)
+					blurAxis(tmp, ch, LW, LH, rad, LW, 1, step)
+				end
 			end
 		end
 	end
@@ -811,6 +956,7 @@ local function renderLens(P, step)
 	local buf = buffer.create(N * 4)
 	local bR, bG, bB = P.baseR, P.baseG, P.baseB
 	local mixIn, mixRim, aIn, aRim = P.mixIn, P.mixRim, P.aIn, P.aRim
+	local sat = P.sat or 1
 	local band = (T > 0 and T or 1) * 1.3
 	for y = 0, LH - 1 do
 		for x = 0, LW - 1 do
@@ -818,9 +964,15 @@ local function renderLens(P, step)
 			local rimK = 1 - smooth01(Sd[idx] / band)
 			local mix = mixIn + (mixRim - mixIn) * rimK
 			local a = aIn + (aRim - aIn) * rimK
-			local cr = clampN(bR + (R[idx] - bR) * mix, 0, 1)
-			local cg = clampN(bG + (G[idx] - bG) * mix, 0, 1)
-			local cb = clampN(bB + (B[idx] - bB) * mix, 0, 1)
+			local cr, cg, cb = R[idx], G[idx], B[idx]
+			if sat ~= 1 then
+				local l = 0.299 * cr + 0.587 * cg + 0.114 * cb
+				cr, cg, cb = l + (cr - l) * sat, l + (cg - l) * sat, l + (cb - l) * sat
+			end
+			local k = Sh[idx]
+			cr = clampN((bR + (cr - bR) * mix) * k, 0, 1)
+			cg = clampN((bG + (cg - bG) * mix) * k, 0, 1)
+			cb = clampN((bB + (cb - bB) * mix) * k, 0, 1)
 			local r8, g8, b8 = floor(cr * 255 + 0.5), floor(cg * 255 + 0.5), floor(cb * 255 + 0.5)
 			local a8 = floor(clampN(a, 0, 1) * 255 + 0.5)
 			buffer.writeu32(buf, (idx - 1) * 4, r8 + g8 * 256 + b8 * 65536 + a8 * 16777216)
@@ -838,10 +990,15 @@ end
 -- Tham số đặt tên theo README của GlassmorphicUI để dễ đối chiếu với bài blog.
 ----------------------------------------------------------------------
 local LIQUID_DEFAULTS = {
-	Thickness = 14, -- px: bề dày vùng khúc xạ ở mép
-	RefractionFactor = 2.1, -- 1 = tắt khúc xạ, 4 = rất mạnh
-	ChromaticAberration = 0.2, -- 0..1: đỏ lấy mẫu xa hơn, xanh dương gần hơn -> viền ám màu
-	BlurRadius = 14, -- px: bán kính frost (sigma = 1/3 bán kính)
+	Thickness = 16, -- px: bề rộng vùng mặt vát (bezel) nơi ánh sáng bị bẻ
+	RefractionFactor = 1.6, -- chiết suất n của kính (1 = tắt khúc xạ, 1.5 ~ kính thật, 4 = rất mạnh); dùng định luật Snell
+	ChromaticAberration = 0.2, -- 0..1: tán sắc, chiết suất đỏ thấp hơn / xanh dương cao hơn -> viền ám màu
+	BlurRadius = 12, -- px: bán kính frost (sigma = 1/3 bán kính, 3 lượt box blur ~ gaussian)
+	BevelHeight = 1, -- độ cao mặt vát so với Thickness (lớn hơn = mép bẻ ánh sáng gắt hơn)
+	GlassBase = 0.45, -- bề dày kính ở mép so với Thickness (tia còn đi thêm quãng này trong kính)
+	Saturation = 1.15, -- 1 = giữ nguyên; kính thật làm nền đậm màu hơn một chút
+	BevelShade = 0.1, -- 0..0.3: sáng/tối nhẹ theo hướng mặt vát so với nguồn sáng trên-trái
+	SamplerWarp = 0.5, -- 0..0.9: lưới lấy mẫu backdrop dày hơn ở sát mép (0 = lưới đều)
 	FresnelSize = 7, -- px: độ rộng quầng sáng mép
 	FresnelHardness = 40, -- 0..100
 	FresnelIntensity = 22, -- 0..100 (0 = tắt)
@@ -1241,7 +1398,7 @@ function Liquid:_sample(now, dl)
 		if sh.w < 12 or sh.h < 12 then
 			return
 		end
-		local gw, gh = clampN(floor(sh.w / 12 + 0.5), 8, 28), clampN(floor(sh.h / 12 + 0.5), 3, 14)
+		local gw, gh = clampN(floor(sh.w / 12 + 0.5), 8, 28), clampN(floor(sh.h / 12 + 0.5), 4, 14)
 		self:_ensureGrid(gw, gh)
 		self.sky = self:_skySnapshot()
 		self.rayParams = self.rayParams or RaycastParams.new()
@@ -1256,10 +1413,11 @@ function Liquid:_sample(now, dl)
 	end
 	local gw, gh = st.gw, st.gh
 	local k = st.fresh and 1 or 0.55 -- làm mượt theo thời gian để khỏi nhấp nháy
+	local wb = clampN(self.P.SamplerWarp or 0.5, 0, 0.9) -- phải trùng với renderLens
 	while st.i < st.n and os.clock() < dl do
 		local i = st.i
 		local cx, cy = i % gw, floor(i / gw)
-		local ray = cam:ViewportPointToRay(ap.X + (cx + 0.5) / gw * sz.X, ap.Y + (cy + 0.5) / gh * sz.Y)
+		local ray = cam:ViewportPointToRay(ap.X + warp01((cx + 0.5) / gw, wb) * sz.X, ap.Y + warp01((cy + 0.5) / gh, wb) * sz.Y)
 		local res = workspace:Raycast(ray.Origin, ray.Direction * RAY_LEN, self.rayParams)
 		local r, g, b = self:_colorOf(res, ray.Direction)
 		if r then
@@ -1292,20 +1450,21 @@ function Liquid:_startLens(now)
 		return
 	end
 	local isl, P = self.isl, self.P
-	self:_ensureGrid(clampN(floor(W / 12 + 0.5), 8, 28), clampN(floor(H / 12 + 0.5), 3, 14))
-	local ds = max(2, sqrt(W * H / 4000)) -- lens thấp độ phân giải: frost che đi, tốn ít CPU
+	self:_ensureGrid(clampN(floor(W / 12 + 0.5), 8, 28), clampN(floor(H / 12 + 0.5), 4, 14))
+	local ds = max(1, sqrt(W * H / 9000)) -- lens gần full-res ở đảo nhỏ; đảo to hạ độ phân giải (frost che đi)
 	local base = isl._style.base
 	local hasDof = isl._dof ~= nil -- có mờ nền thật thì lens chỉ thêm ánh màu ở mép
-	-- sigma = BlurRadius/3 (như bài blog), nhưng không nhỏ hơn nửa ô lưới backdrop: blur phải che được độ phân giải thấp
+	local wb = clampN(P.SamplerWarp or 0.5, 0, 0.9)
+	-- sigma = BlurRadius/3 (như bài blog). Tái dựng bicubic nên chỉ cần sàn nhỏ theo ô lưới, không còn phải che vết bilinear
 	local cell = max(W / self.gw, H / self.gh)
-	local sc = max(P.BlurRadius / 3, cell * 0.5) / ds
-	local blurW = floor(sqrt(1.5 * sc * sc + 0.25))
-	local rho = clampN(P.RefractionFactor, 1, 4)
+	local sigma = max(P.BlurRadius / 3, cell * 0.35) / ds
 	local L = {
 		W = W, H = H, R = r, T = P.Thickness,
-		A = clampN(0.45 * (rho - 1), 0, 1),
+		ior = clampN(P.RefractionFactor, 1, 4),
 		ca = clampN(P.ChromaticAberration, 0, 1),
-		ds = ds, blurW = blurW,
+		bevel = P.BevelHeight, glassBase = P.GlassBase,
+		ds = ds, blurRadii = gaussBoxRadii(sigma), warp = wb,
+		sat = P.Saturation, shade = P.BevelShade,
 		gw = self.gw, gh = self.gh, gr = self.gr, gg = self.gg, gb = self.gb,
 		baseR = base.R, baseG = base.G, baseB = base.B,
 		mixIn = hasDof and 0.1 or 0.6, mixRim = 0.75,
