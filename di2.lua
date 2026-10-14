@@ -1915,7 +1915,7 @@ function Island.new(config)
 	self._expW, self._expH = M.ExpandedW, M.BannerH
 
 	self:_build()
-	self:_ blurInit()
+	self:_blurInit()
 	self:_connect()
 	self:_render(false)
 	return self
