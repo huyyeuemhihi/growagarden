@@ -3258,6 +3258,9 @@ Components.Tab = (function()
 			local SectionFrame  = Components.Section(SectionTitle, Tab.Container)
 			Section.Container   = SectionFrame.Container
 			Section.ScrollFrame = Tab.Container
+			function Section:SetTitle(Text)
+				SectionFrame:SetTitle(Text)
+			end
 			setmetatable(Section, Elements)
 			return Section
 		end
@@ -4549,6 +4552,26 @@ Components.Window = (function()
 			ZIndex       = 5,
 		})
 
+		-- Gom toàn bộ lớp kính vào MỘT khung ZIndex 0 nằm DƯỚI nội dung.
+		-- Lý do: ZIndexBehavior = Sibling, nội dung (TabFrame, Container, Search...) có
+		-- ZIndex mặc định 1 nên nếu AcrylicFrame (2) / FrostedOverlay (3) / Sheen (4)
+		-- nằm cùng cấp thì chúng vẽ ĐÈ LÊN nội dung -> chữ bị mờ tối. Trong GlassStack,
+		-- thứ tự ZIndex 1..5 giữa các lớp kính vẫn giữ nguyên.
+		local GlassStack = New("Frame", {
+			Name                   = "GlassStack",
+			Size                   = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel        = 0,
+			Interactable           = false,
+			ZIndex                 = 0,
+		}, {
+			WindowShadow,     -- ZIndex 1
+			AcrylicFrame,     -- ZIndex 2
+			FrostedOverlay,   -- ZIndex 3
+			SheenFrame,       -- ZIndex 4
+			TopLight,         -- ZIndex 5
+		})
+
 		-- Khung cửa sổ gốc kết nối hoàn chỉnh các lớp
 		Window.Root = New("Frame", {
 			Name                   = "WindowRoot",
@@ -4557,11 +4580,7 @@ Components.Window = (function()
 			Position               = Window.Position,
 			Parent                 = Config.Parent,
 		}, {
-			WindowShadow,     -- ZIndex 1
-			AcrylicFrame,     -- ZIndex 2
-			FrostedOverlay,   -- ZIndex 3
-			SheenFrame,       -- ZIndex 4
-			TopLight,         -- ZIndex 5
+			GlassStack,       -- ZIndex 0: toàn bộ lớp kính nằm dưới nội dung
 			Window.TabDisplay,
 			Window.ContainerCanvas,
 			SearchBox,
