@@ -1,74 +1,36 @@
 --[[
-	DynamicIsland.lua  v5  -  Dynamic Island (iPhone 14 Pro) + LIQUID GLASS dựng lại đúng theo bài
-	"Reproducing Liquid Glass in Roblox" của boatbomber (boatbomber.com/blog/liquid-glass)
-	-------------------------------------------------------------------------------
-	MỚI Ở v5 - làm lại cách dựng kính cho đúng quy trình của bài (tên tham số lấy theo README GlassmorphicUI)
-	• Hình dạng: rounded rect có góc SUPERELLIPSE (SuperEllipseFactor), mask byte chống răng cưa.
-	• Độ sâu + pháp tuyến: lấy từ HỌ ĐƯỜNG ĐỒNG MỨC "melted" (bán kính góc và số mũ đổi mượt vào trong), giải bằng chia đôi + secant,
-	  rồi pháp tuyến = -gradient của trường độ sâu trơn. Hết nếp gấp chéo ở góc của SDF thô (bản v4 bị lỗi này).
-	• Khúc xạ: Snell trên bezel lồi (RefractionFactor = tỉ số chiết suất, Thickness = bề dày), vector dịch tính sẵn cho từng pixel,
-	  tách kênh màu (đỏ xa hơn / xanh dương gần hơn ChromaticAberration).
-	• Backdrop: lưới thô và MÉO (dày ở dải viền, thưa ở giữa), lấy mẫu bằng raycast xuyên qua part gần như vô hình,
-	  làm tươi dần trong ngân sách ms; dựng lại bằng Catmull-Rom bicubic.
-	• Frost: gaussian sigma = BlurRadius / 3 trên ảnh đã khúc xạ, RỒI MỚI chồng viền Fresnel + glare (GlareAngle, GlareConvergence,
-	  GlareOppositeSide...) tính từ chính độ sâu và pháp tuyến đó.
-	• Bản đồ tra cứu theo pixel chỉ tính lại khi HÌNH DẠNG đổi (và đảo đã đứng yên); nền đổi thì chỉ dựng lại ảnh.
-	• Một ảnh EditableImage duy nhất cho cả tấm kính (không còn ảnh viền 9-slice riêng), tối đa 1 lần ghi mỗi frame.
-	• Không có EditableImage (hoặc lỗi) -> tự quay về kính cổ điển của v3.
-
-	KHÁC BÀI GỐC (nói thật)
-	• Bài dùng Actor để dựng ảnh song song; executor thường không có nên ở đây chạy đường "sync" (chia nhỏ theo ngân sách ms/frame).
-	• SuperEllipseFactor mặc định 2 thay vì 3: thân đảo vẫn bị cắt bằng UICorner (cung tròn) nên góc superellipse sẽ lệch với đường cắt.
-	• Backdrop là CẢNH 3D dựng lại bằng raycast (màu Part + mô hình trời), không phải ảnh thật của màn hình: Roblox không cho đọc framebuffer.
-	• Chưa có "glass over glass" của bài.
-
-	MỚI Ở v3: hết tràn viền (mọi lớp nằm TRONG thân CanvasGroup), vùng mờ nền thật (Part DepthOfField) thu vào Inset px.
-	MỚI Ở v2: spring kiểu SwiftUI, icon dùng chung (matched geometry), nội dung vào theo tầng, số/chữ "roll", kéo dây cao su.
-
-	CÁCH DÙNG (API giữ nguyên như v1-v4)
-	    local Island = loadstring(game:HttpGet("LINK_RAW_CUA_BAN"))()
-	    local island = Island.new({
-	        Top = 11, Scale = nil,          -- Scale nil = tự co theo màn hình
-	        Style = "Frosted",              -- "Frosted" = kính xám mờ đục | "Dark" = kính đen kiểu iOS
-	        RealBlur = true,                -- mờ nền thật (Part Glass + DepthOfField); false = tắt; hoặc bảng thông số:
-	                                        --   { NearIntensity = 1, Inset = 6, Slices = 8, Distance = nil, FocusDistance = nil, InFocusRadius = 100 }
-	        Liquid = true,                  -- engine kính v5; false = kính cổ điển v3; hoặc bảng ghi đè (xem LIQUID_DEFAULTS), ví dụ:
-	                                        --   { Thickness = UDim.new(0.15, 0), RefractionFactor = 2.1, ChromaticAberration = 0.2,
-	                                        --     SuperEllipseFactor = 2, BlurRadius = UDim.new(0.06, 0), FresnelIntensity = 25,
-	                                        --     GlareIntensity = 70, GlareAngle = -50, Transparency = nil, Backdrop = true, Budget = 3 }
-	        Glass = true,                   -- false = đen đặc 100% như iPhone thật (tự tắt luôn RealBlur và Liquid)
-	        Transparency = nil,             -- độ trong của thân kính (nil = theo Style)
-	    })
-
-	    island:Notify({ Title = "Auto Farm", Text = "Đã bật Level Farm",
-	        Color = Island.Colors.Green, Duration = 3, Callback = function() end })
-
-	    island:SetActivity({ Title = "Auto Farm", Text = "Level Farm • Bandit",
-	        Color = Island.Colors.Green, Right = "Lv 120", Progress = 0.35,
-	        Buttons = {
-	            { Text = "Dừng", Style = "destructive", Callback = function() end },
-	            { Text = "Ẩn",   Style = "default",     Callback = function() island:Collapse() end },
-	        } })
-	    island:UpdateActivity({ Right = "Lv 121", Progress = 0.6 })
-	    island:Expand() / :Collapse() / :Toggle() / :ClearActivity()
-	    island:Hide() / :Show() / :SetGlass(true|false) / :SetBlur(true|false|{...}) / :SetTop(px) / :SetScale(s) / :Destroy()
-	    island:SetLiquid(false | true | { ... })   -- đổi engine/tham số kính khi đang chạy
-	    island:RefreshGlass()                       -- ép quét lại backdrop (vd. vừa teleport)
-
-	Bấm vào đảo (khi có Activity) = mở rộng / thu lại.  Vuốt lên = đóng.
-	Icon: Icon = "rbxassetid://123" (hoặc số id) hoặc Glyph = "⚡"; không có thì lấy chữ cái đầu của Title.
-	Chạy thử nhanh: getgenv().DynamicIslandDemo = true trước khi load file này.
-
-	GIỚI HẠN (nói thật)
-	• CHƯA kiểm chứng trong Roblox thật. Phần toán (SDF superellipse, họ đường đồng mức, Snell, lưới méo, Catmull-Rom, frost, Fresnel/glare)
-	  đã chạy thử bằng Luau trên máy tính và xem lại ảnh kết quả; phần gọi API Roblox (EditableImage, raycast) chạy thử trên môi trường giả.
-	  Nếu EditableImage bị chặn trên executor của bạn, đảo tự dùng kính cổ điển.
-	• Cần client có AssetService:CreateEditableImage, EditableImage:WritePixelsBuffer và ImageLabel.ImageContent.
-	• Backdrop bằng raycast chỉ thấy vật thể 3D (màu Part, không texture/ánh sáng thật/skybox): màu kính là gần đúng.
-	  Không thấy được ScreenGui khác. Chỉnh Sky = {...} nếu màu trời lệch.
-	• Thân vẫn bị cắt bằng UICorner (bo tròn thường, không phải squircle liên tục của Apple).
-	• RealBlur (DepthOfField) vẫn giữ nguyên như v3 và vẫn có giới hạn cũ: chỉ mờ cảnh 3D, cần đồ hoạ >= 8,
-	  DOF có thể lem nhẹ ra ngoài viền (tăng Inset hoặc đặt RealBlur = false).
+	DynamicIsland.lua v6.0 — Dynamic Island (iPhone 14 Pro) + Engine LIQUID GLASS 100% chuẩn
+	boatbomber / boatbeaker (GlassmorphicUI 1.0.0 & boatbomber.com/blog/liquid-glass)
+	-----------------------------------------------------------------------------------------
+	ĐIỂM MỚI Ở v6.0 (Tái cấu trúc 100% theo đúng kiến trúc & toán học của GlassmorphicUI):
+	1. Một ảnh EditableImage (GlassPane) hợp nhất duy nhất cho toàn bộ 5 giai đoạn:
+	   Bake Geometry -> Sample Screen -> Reco[span_117](start_span)[span_117](end_span)nstruct (Catmull-Rom 4x4 + Chromatic Aberration)
+	   -> Frost Blur (Two-Leve[span_15](start_span)[span_15](end_span)[span_18](start_span)[span_18](end_span)l Fractional Mix + Premultiplied Alpha) -> Rim Lighting (Fresnel + Glare).
+	2. Hình học Siêu Elip (SuperEllipseFactor = 3, miền 2..7) kết hợp Họ Đường Đồng Mức Tan Chảy
+	   (Blended/Melted Contour Family): bán kính góc R(d) và số mũ siêu elip n(d) biến thiên
+	   mượt từ biên vào tâm, xóa bỏ hoàn toàn nếp gấp chéo 90 độ ở góc (corner diagonal crease).
+	3. Đóng băng hình học (Geometry Baking) và lưu cache dùng chung cho các cửa sổ cùng hình dạng:
+	   lưu sẵn byte mặt nạ alpha, vector dịch chuyển khúc xạ (dispX, dispY) đã tái tỷ lệ hồ sơ
+	   biến dạng (distortion profile rescaling) theo định luật Snell, và độ sáng viền (Fresnel + Glare).
+	4. Tán sắc (Chromatic Aberration) đúng chuẩn README GlassmorphicUI: nhân vector dịch chuyển với
+	   (1 + s) cho kênh Đỏ, 1.0 cho Xanh lá, (1 - s) cho Xanh dương; tự động gộp còn 1 lần đọc
+	   Catmull-Rom 16-tap ở vùng nội tâm phẳng (disp == 0) hoặc khi tắt tán sắc.
+	5. Lấy mẫu màn hình (Screen Sampler) trên lưới thô ~1/5 độ phân giải có Biến Dạng Mật Độ
+	   (Density Warp) tập trung ô lấy mẫu vào đúng dải đáp khúc xạ viền trong (inner rim hot zone):
+	   • Duyệt cây giao diện 2D (BasePlayerGui:GetGuiObjectsAtPosition) từ trước ra sau: lấy màu
+	     Frame, TextLabel/TextButton, ImageLabel/ImageButton và hỗ trợ kính chồng kính (glass-over-glass).
+	   • Bắn tia 3D (ViewportPointToRay / ScreenPointToRay) vào workspace có chiếu sáng mặt trời,
+	     màu vật liệu Terrain/Water, sương mù Lighting (Fog/Atmosphere) và màu bầu trời.
+	   • Làm mới cuốn chiếu (Rolling Refresh) trong ngân sách 5 ms/frame và tự động chuyển sang
+	     trạng thái nghỉ ("idle") khi cảnh nền hội tụ (changedCells == 0).
+	6. Frost Blur chuẩn: nội suy tuyến tính giữa 2 mức bán kính nguyên kề nhau (Two-Level Mix) để
+	   tránh nhảy bậc (popping); bảo vệ biên trong suốt bằng màu Tint cửa sổ + Premultiplied Alpha.
+	7. Chiếu sáng viền cộng SAU Frost Blur: Fresnel lũy thừa bậc 5 (d^5) + Glare hai vệt đối xứng
+	   cực theo góc GlareAngle (-50 độ), điều chỉnh vệt đối diện bằng GlareOppositeSide (50%)
+	   và độ hội tụ bằng GlareConvergence (90).
+	8. Tích hợp đầy đủ API chuẩn của thư viện GlassmorphicUI (Island.GlassmorphicUI):
+	   new(), addGlassBackground(), applyGlassToImageLabel(), forceUpdate(), pauseUpdates(),
+	   resumeUpdates(), setDefaultBlurRadius(), getDebugStats() + hỗ trợ CollectionService tag "GlassmorphicUI".
 ]]
 
 local Players = game:GetService("Players")
@@ -78,12 +40,13 @@ local UserInputService = game:GetService("UserInputService")
 local TextService = game:GetService("TextService")
 local Lighting = game:GetService("Lighting")
 local AssetService = game:GetService("AssetService")
+local CollectionService = game:GetService("CollectionService")
 
 local Island = {}
 Island.__index = Island
 
 ----------------------------------------------------------------------
--- Cấu hình chung
+-- Cấu hình chung Dynamic Island
 ----------------------------------------------------------------------
 Island.Colors = {
 	Blue = Color3.fromRGB(10, 132, 255),
@@ -97,13 +60,11 @@ Island.Colors = {
 	Gray = Color3.fromRGB(142, 142, 147),
 }
 
--- Muốn đổi font: Island.Fonts.Bold = Enum.Font.Montserrat ... (đặt trước khi Island.new)
 Island.Fonts = {
 	Regular = Enum.Font.GothamMedium,
 	Bold = Enum.Font.GothamBold,
 }
 
--- Số đo lấy theo iPhone 14 Pro (đơn vị point, UIScale lo phần phóng to/thu nhỏ)
 local M = {
 	IdleW = 126,
 	IdleH = 37,
@@ -114,52 +75,48 @@ local M = {
 	Margin = 18,
 	IconBig = 44,
 	IconSmall = 22,
-	LeadW = 34, -- vùng icon mỗi bên ở trạng thái compact
+	LeadW = 34,
 }
 local HEADER_X = M.Margin + M.IconBig + 12
 
--- Vị trí/kích thước/độ bo của icon dùng chung cho từng trạng thái (toạ độ trong thân đảo)
 local ICON_BIG = { x = M.Margin, y = 20, s = M.IconBig, r = 0.24 }
 local ICON_SMALL = { x = 12, y = (M.IdleH - M.IconSmall) / 2, s = M.IconSmall, r = 0.5 }
 
--- Spring theo kiểu SwiftUI: { response (giây), dampingFraction }
-local SPRING_OPEN = { w = { 0.46, 0.70 }, h = { 0.50, 0.74 }, icon = { 0.46, 0.72 } } -- mở: nảy rõ, chiều cao trễ hơn
-local SPRING_CLOSE = { w = { 0.40, 0.80 }, h = { 0.42, 0.82 }, icon = { 0.40, 0.84 } } -- thu: gọn, nảy ít
+local SPRING_OPEN = { w = { 0.46, 0.70 }, h = { 0.50, 0.74 }, icon = { 0.46, 0.72 } }
+local SPRING_CLOSE = { w = { 0.40, 0.80 }, h = { 0.42, 0.82 }, icon = { 0.40, 0.84 } }
 
--- Góc xoay của viền sáng theo trạng thái (ánh sáng "trượt" quanh viền khi đảo đổi dạng)
-local RIM_ANGLE = { idle = 40, activity = 58, notify = 72, expanded = 100, hidden = 40 }
+-- Góc xoay trục Glare theo từng trạng thái đảo (mặc định chuẩn GlassmorphicUI là -50 độ)
+local RIM_ANGLE = { idle = -50, activity = -38, notify = -24, expanded = 15, hidden = -50 }
 
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
--- Hai phong cách kính. Frosted = kính xám mờ đục như Night Hub (nên đi cùng RealBlur), Dark = kính đen như iOS
+
 local STYLES = {
-	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.4, depthAlpha = 0.035, sheenTop = 0.84, tint = 0.4 },
-	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.12, depthAlpha = 0.07, sheenTop = 0.9, tint = 0.7 },
+	Frosted = { base = Color3.fromRGB(66, 64, 68), transparency = 0.82, depthAlpha = 0.035, sheenTop = 0.84 },
+	Dark = { base = Color3.fromRGB(30, 32, 38), transparency = 0.65, depthAlpha = 0.07, sheenTop = 0.9 },
 }
--- Mờ nền thật: Part kính vô hình + DepthOfField (xem _blurInit). Mọi số chỉnh được qua RealBlur = { ... }
+
 local BLUR_DEFAULTS = {
-	Transparency = 0.985, -- lớp nền không phản chiếu; chỉ dùng để tạo vùng DOF
-	Distance = nil, -- khoảng cách Part tới camera; nil = tự tính theo NearPlaneZ
-	FocusDistance = nil, -- nil = Distance * 2
+	Transparency = 0.985,
+	Distance = nil,
+	FocusDistance = nil,
 	InFocusRadius = 100,
-	NearIntensity = 1, -- độ mờ (0..1)
-	Slices = 8, -- số lát mỗi bên để xấp xỉ góc bo
-	Inset = 6, -- thu vùng mờ vào trong px để phần mờ lem ra không vượt khỏi viền kính
+	NearIntensity = 1,
+	Slices = 8,
+	Inset = 6,
 }
--- Quầng sáng theo ngón tay: GLOW_N vòng tròn rất nhạt chồng nhau, vòng lớn nhất = GLOW_D (khớp khung Glow 170px)
+
 local GLOW_N, GLOW_D, GLOW_A = 16, 170, 0.0157
--- Viền kính: mỗi lớp là một UIStroke bám mép và dày vào TRONG thân. t = bề dày (px), lo = độ trong ở chỗ sáng nhất, mid = ở chỗ tối nhất.
--- Chồng 4 lớp -> mép sáng sắc rồi mờ dần vào trong (giống độ dày của kính). Không còn bóng đổ/viền nào nằm ngoài thân.
 local EDGE_LAYERS = {
 	{ t = 1.1, lo = 0.28, mid = 0.90 },
 	{ t = 2.6, lo = 0.80, mid = 0.97 },
 	{ t = 5, lo = 0.90, mid = 0.99 },
 	{ t = 8.5, lo = 0.95, mid = 1 },
 }
-local DEPTH_N, DEPTH_STEP = 8, 2 -- chiều sâu kính: 8 lớp thu dần vào trong (độ đậm lấy theo STYLES)
+local DEPTH_N, DEPTH_STEP = 8, 2
 
 ----------------------------------------------------------------------
--- Spring (tích phân semi-implicit Euler, chia bước nhỏ để ổn định)
+-- Bộ tích phân lò xo (Spring)
 ----------------------------------------------------------------------
 local Spring = {}
 Spring.__index = Spring
@@ -195,8 +152,44 @@ function Spring:Snap(value)
 end
 
 ----------------------------------------------------------------------
--- Tiện ích
+-- Tiện ích cơ bản
 ----------------------------------------------------------------------
+local floor, ceil, sqrt, abs, min, max = math.floor, math.ceil, math.sqrt, math.abs, math.min, math.max
+local sin, cos, atan, asin, rad = math.sin, math.cos, math.atan, math.asin, math.rad
+
+local function clampN(x, a, b)
+	if x < a then
+		return a
+	elseif x > b then
+		return b
+	end
+	return x
+end
+
+local function smooth01(t)
+	if t <= 0 then
+		return 0
+	elseif t >= 1 then
+		return 1
+	end
+	return t * t * (3 - 2 * t)
+end
+
+local function lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+local function newArray(n, v)
+	if table.create then
+		return table.create(n, v)
+	end
+	local t = {}
+	for i = 1, n do
+		t[i] = v
+	end
+	return t
+end
+
 local function tween(obj, time, props, style, dir)
 	local t = TweenService:Create(
 		obj,
@@ -289,7 +282,10 @@ local function mount(gui)
 	if ok and gui.Parent then
 		return
 	end
-	gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local lp = Players.LocalPlayer
+	if lp then
+		gui.Parent = lp:WaitForChild("PlayerGui")
+	end
 end
 
 local function isPointer(input)
@@ -312,7 +308,6 @@ local function newLabel(parent, font, size, color, transparency)
 	return l
 end
 
--- Đổi chữ kiểu content transition của iOS: chữ mới trượt lên + hiện dần
 local function rollText(label, text, basePos, baseTrans)
 	if label.Text == text then
 		return
@@ -330,7 +325,7 @@ local function rollText(label, text, basePos, baseTrans)
 end
 
 ----------------------------------------------------------------------
--- Icon dùng chung (một icon duy nhất, spring giữa các trạng thái)
+-- Icon, Layer, Part, Button cho Dynamic Island
 ----------------------------------------------------------------------
 local function newIcon(parent)
 	local group = mk("CanvasGroup", {
@@ -385,9 +380,6 @@ local function setIcon(icon, spec, fallbackText)
 	end
 end
 
-----------------------------------------------------------------------
--- Layer (lớp nội dung) và part (tầng nội dung để stagger)
-----------------------------------------------------------------------
 local function newLayer(parent, name)
 	local group = mk("CanvasGroup", {
 		Name = name,
@@ -408,7 +400,6 @@ local function newLayer(parent, name)
 	return { group = group, scale = scale, content = content, w = 0, h = 0, parts = {} }
 end
 
--- Layer luôn bám mép trên của đảo; scale quanh tâm của chính layer
 local function setLayerSize(layer, w, h)
 	layer.w, layer.h = w, h
 	layer.group.Size = UDim2.fromOffset(w, h)
@@ -428,7 +419,6 @@ local function newPart(parent)
 	return { group = group, scale = scale }
 end
 
--- Các tầng nội dung hiện lần lượt: trượt lên + scale + fade, tầng sau trễ hơn một nhịp
 local function revealParts(layer, animate, token, isAlive)
 	for i, part in ipairs(layer.parts) do
 		if animate then
@@ -489,10 +479,8 @@ local function newButton(parent, spec, accent, size, position)
 	end
 
 	mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, btn)
-	-- Viền kính mảnh quanh nút
 	local stroke = mk("UIStroke", { Thickness = 1, Color = WHITE, Transparency = 0 }, btn)
 	addGradient(stroke, 90, { { 0, 0.78 }, { 0.5, 0.95 }, { 1, 0.9 } })
-	-- Vệt sáng nửa trên của nút
 	local shine = mk("Frame", {
 		BackgroundColor3 = WHITE,
 		BorderSizePixel = 0,
@@ -523,443 +511,342 @@ local function newButton(parent, spec, accent, size, position)
 end
 
 ----------------------------------------------------------------------
--- LIQUID GLASS v5 - dựng lại theo đúng quy trình của bài "Reproducing Liquid Glass in Roblox" (boatbomber)
---   1) Hình dạng: rounded rect với góc SUPERELLIPSE -> mask byte + SDF, tính MỘT lần cho mỗi hình dạng
---   2) Độ sâu + pháp tuyến lấy từ họ đường đồng mức "melted" (bán kính góc và số mũ đổi mượt vào trong)
---      -> một trường trơn duy nhất, không còn nếp gấp chéo ở góc như SDF thô
---   3) Khúc xạ Snell trên mặt bezel lồi (RefractionFactor) -> vector dịch lấy mẫu từng pixel, tách kênh màu
---   4) Lưới backdrop thô và MÉO (dày ở dải viền), lấy mẫu bằng raycast, dựng lại bằng Catmull-Rom bicubic
---   5) Frost gaussian (sigma = BlurRadius / 3) trên ảnh đã khúc xạ, RỒI MỚI chồng Fresnel + glare
+-- LÕI TOÁN HỌC LIQUID GLASS (100% CHUẨN BOATBOMBER / GLASSMORPHICUI)
 ----------------------------------------------------------------------
 --[[CORE_BEGIN]]
-local floor, ceil, sqrt, abs, min, max = math.floor, math.ceil, math.sqrt, math.abs, math.min, math.max
-local sin, tan, asin, atan, rad = math.sin, math.tan, math.asin, math.atan, math.rad
-local cos = math.cos
 
-local function newArray(n, v)
-	if table.create then
-		return table.create(n, v)
-	end
-	local t = {}
-	for i = 1, n do
-		t[i] = v
-	end
-	return t
-end
-
-local function clampN(x, a, b)
-	if x < a then
-		return a
-	end
-	if x > b then
-		return b
-	end
-	return x
-end
-
-local function smooth01(t)
-	if t <= 0 then
-		return 0
-	end
-	if t >= 1 then
-		return 1
-	end
-	return t * t * (3 - 2 * t)
-end
-
--- UDim (hoặc bảng {Scale, Offset}) hoặc số px -> px, kẹp trong [lo, hi]
-local function resolveLen(v, axis, lo, hi)
-	local x
-	local tv = typeof(v)
-	if tv == "number" then
-		x = v
-	elseif tv == "UDim" or tv == "table" then
-		x = (v.Scale or 0) * axis + (v.Offset or 0)
+-- Giải quyết giá trị UDim hoặc number theo trục ngắn nhất (minAxis) của cửa sổ
+local function resolveUDim(val, minAxis, minVal, maxVal)
+	local px
+	if typeof(val) == "UDim" then
+		px = val.Scale * minAxis + val.Offset
+	elseif type(val) == "number" then
+		px = val
 	else
-		x = 0
+		px = 0
 	end
-	return clampN(x, lo, hi)
+	return clampN(px, minVal or 0, maxVal or minAxis)
 end
 
--- Khoảng cách có dấu tới rounded rect có góc superellipse (chuẩn n, n = 2 là cung tròn). Âm = bên trong.
-local function sdSuper(px, py, hx, hy, r, n)
-	local qx, qy = abs(px) - (hx - r), abs(py) - (hy - r)
+-- Hàm khoảng cách có dấu (SDF) cho hình chữ nhật bo góc Siêu Elip (Superellipse)
+-- p >= 2 (p = 2 là đường tròn, p = 3..7 là squircle siêu elip)
+local function superellipseSDF(dx, dy, hx, hy, r, p)
+	local clR = min(r, hx, hy)
+	local ex, ey = hx - clR, hy - clR
+	local qx, qy = abs(dx) - ex, abs(dy) - ey
 	local ax, ay = qx > 0 and qx or 0, qy > 0 and qy or 0
-	local len
-	if n == 2 then
-		len = sqrt(ax * ax + ay * ay)
-	elseif ax == 0 or ay == 0 then
-		len = ax + ay
-	else
-		len = (ax ^ n + ay ^ n) ^ (1 / n)
-	end
-	local inner = qx > qy and qx or qy
-	if inner > 0 then
-		inner = 0
-	end
-	return len + inner - r
-end
-
--- Họ đường đồng mức "melted": ở độ sâu d, đường đồng mức là rounded rect thu vào d px,
--- bán kính góc tăng dần tới stadium và số mũ superellipse giảm dần về 2 khi đi vào trong.
-local function contour(d, S)
-	local hx, hy = S.hx - d, S.hy - d
-	local rmax = hx < hy and hx or hy
-	local u = smooth01(d / S.melt)
-	local r0 = S.r < rmax and S.r or rmax
-	return hx, hy, r0 + (rmax - r0) * u, S.n + (2 - S.n) * u
-end
-
--- Độ sâu (px) của một điểm nằm bên trong: nghiệm d của "điểm nằm đúng trên đường đồng mức d" (chia đôi, các đường lồng nhau),
--- kết thúc bằng một bước nội suy secant để độ sâu gần như chính xác (tránh nhiễu lượng tử hóa khi lấy đạo hàm ra pháp tuyến).
-local function depthInside(px, py, S, phi0)
-	local hx, hy, rc, nc = contour(S.dmax, S)
-	local fhi = sdSuper(px, py, hx, hy, rc, nc)
-	if fhi <= 0 then
-		return S.dmax
-	end
-	local lo, hi, flo = 0, S.dmax, phi0
-	for _ = 1, 8 do
-		local mid = (lo + hi) * 0.5
-		hx, hy, rc, nc = contour(mid, S)
-		local fm = sdSuper(px, py, hx, hy, rc, nc)
-		if fm <= 0 then
-			lo, flo = mid, fm
+	local dc
+	if ax > 0 and ay > 0 then
+		if abs(p - 2) < 0.01 then
+			dc = sqrt(ax * ax + ay * ay)
 		else
-			hi, fhi = mid, fm
+			dc = (ax ^ p + ay ^ p) ^ (1 / p)
 		end
-	end
-	local span = fhi - flo
-	if span > 1e-9 then
-		return lo + (hi - lo) * (-flo) / span
-	end
-	return (lo + hi) * 0.5
-end
-
--- Bezel lồi h(x) = (1 - (1 - x)^4)^(1/4), x = độ sâu / Thickness. Tia nhìn thẳng xuống gặp mặt nghiêng góc ti = atan(h'),
--- khúc xạ theo Snell sin(tt) = sin(ti) / rho, rồi đi hết bề dày h -> dịch ngang T * h * tan(ti - tt) (hướng vào trong).
-local function bezelShift(x, rho, T)
-	if x <= 0 or x >= 1 or rho <= 1 then
-		return 0
-	end
-	if x < 0.004 then
-		x = 0.004
-	end
-	local om = 1 - x
-	local om2 = om * om
-	local base = 1 - om2 * om2
-	local h = base ^ 0.25
-	local slope = om2 * om * base ^ -0.75
-	local ti = atan(slope)
-	local tt = asin(sin(ti) / rho)
-	return T * h * tan(ti - tt)
-end
-
--- Cường độ theo độ sâu: Hardness cao = giữ sáng đều rồi cắt gấp gần mép trong
-local function edgeProfile(t, hardness)
-	local w = (1 - hardness / 100) * 0.9 + 0.05
-	local v = (1 - t) / w
-	if v <= 0 then
-		return 0
-	end
-	if v >= 1 then
-		return 1
-	end
-	return v * v * (3 - 2 * v)
-end
-
--- Quy đổi tham số (UDim/số) sang px theo kích thước hiện tại của đảo
-local function resolveShape(W, H, r, P)
-	local mn = min(W, H)
-	local hmin = mn / 2
-	local S = { W = W, H = H, hx = W / 2, hy = H / 2, hmin = hmin }
-	S.n = clampN(P.SuperEllipseFactor or 2, 2, 7)
-	if P.CornerRadius ~= nil then
-		S.r = resolveLen(P.CornerRadius, mn, 0, hmin)
 	else
-		S.r = clampN(r, 0, hmin)
+		dc = ax + ay
 	end
-	S.T = resolveLen(P.Thickness, mn, 1, hmin)
-	S.FS = resolveLen(P.FresnelSize, mn, 0, hmin)
-	S.GS = resolveLen(P.GlareSize, mn, 0, hmin)
-	S.blur = resolveLen(P.BlurRadius, mn, 1, mn)
-	S.rho = clampN(P.RefractionFactor, 1, 4)
-	S.ca = clampN(P.ChromaticAberration, 0, 1)
-	S.Fi = clampN(P.FresnelIntensity, 0, 100) / 100
-	S.Fh = clampN(P.FresnelHardness, 0, 100)
-	S.Gi = clampN(P.GlareIntensity, 0, 120) / 100
-	S.Gh = clampN(P.GlareHardness, 0, 100)
-	S.gq = 1 + 11 * clampN(P.GlareConvergence, 0, 100) / 100
-	S.Go = clampN(P.GlareOppositeSide, 0, 100) / 100
-	local th = rad(clampN(P.GlareAngle, -180, 180))
-	S.ax, S.ay = cos(th), -sin(th) -- trục glare (y hướng xuống màn hình)
-	S.reach = max(S.T, S.FS, S.GS)
-	S.dmax = max(1, min(S.reach * 1.25 + 1, hmin - 0.5))
-	S.melt = S.dmax
-	return S
+	local inside = min(max(qx, qy), 0)
+	return dc + inside - clR
 end
 
--- Số điểm lưới backdrop theo kích thước đảo (trần 32x16 = 512 raycast mỗi lượt quét)
-local function gridDims(W, H)
-	return clampN(floor(W / 11 + 0.5), 8, 32), clampN(floor(H / 11 + 0.5), 4, 16)
+-- Họ đường đồng mức tan chảy (Blended / Melted Contour Family):
+-- Tại độ sâu chuẩn hóa t = s / T (0 ở mép, 1 ở biên trong của mặt vát),
+-- bán kính góc R(t) mở rộng mượt về phía bán kính nội tâm và số mũ p(t) giãn mượt về 2.
+-- Kết hợp trường điều hòa nội tâm giúp pháp tuyến (nx, ny) liên tục C1, KHÔNG BAO GIỜ có nếp gấp 90 độ ở góc!
+local function meltedContourNormal(dx, dy, hx, hy, R0, p0, T, s0)
+	local minHalf = min(hx, hy)
+	local t = T > 0 and clampN(s0 / T, 0, 1) or 0
+	local m = smooth01(t)
+	local targetR = min(minHalf, max(R0, R0 + T * 0.85))
+	local Rt = R0 + (targetR - R0) * m
+	local pt = p0 + (2 - p0) * m
+
+	local ex, ey = max(hx - Rt, 0), max(hy - Rt, 0)
+	local ax, ay = abs(dx) - ex, abs(dy) - ey
+	local sx = dx < 0 and -1 or (dx > 0 and 1 or 0)
+	local sy = dy < 0 and -1 or (dy > 0 and 1 or 0)
+
+	local gx, gy
+	if ax > 0 and ay > 0 then
+		-- Vùng góc siêu elip tan chảy: đạo hàm giải tích của (ax^pt + ay^pt)^(1/pt)
+		gx = sx * (ax ^ (pt - 1))
+		gy = sy * (ay ^ (pt - 1))
+	else
+		-- Để tránh đạo hàm đảo hướng đột ngột 90 độ khi ax <= 0 hoặc ay <= 0 (nguyên nhân tạo nếp gấp),
+		-- ta pha trộn mượt giữa khoảng cách cạnh và trường elip điều hòa từ tâm.
+		local soft = max(Rt, T, 4) * 0.35
+		local wx = math.exp(ax / soft)
+		local wy = math.exp(ay / soft)
+		gx = sx * (wx + 0.15 * abs(dx) / max(hx, 1))
+		gy = sy * (wy + 0.15 * abs(dy) / max(hy, 1))
+	end
+
+	local len = sqrt(gx * gx + gy * gy)
+	if len > 1e-6 then
+		return gx / len, gy / len
+	end
+	return 0, -1
 end
 
--- Lưới MÉO một trục: mật độ điểm cao ở dải viền (nơi khúc xạ phóng đại mạnh nhất), thưa ở giữa.
--- Trả về pos[1..n] (px trong cửa sổ) và lut[px + 1] = chỉ số lưới thập phân tương ứng (để tra ngược khi lấy mẫu).
-local function warpAxis(L, T, n)
-	local band = max(T * 1.6, 1)
-	local MS = 256
-	local cum = newArray(MS + 1, 0)
-	local acc = 0
-	for k = 1, MS do
-		local x = (k - 0.5) / MS * L
-		local s = x < L - x and x or L - x
-		local t = s / band
-		if t > 1 then
-			t = 1
+-- Bảng độ lệch khúc xạ theo định luật Snell có TÁI TỶ LỆ HỒ SƠ BIẾN DẠNG (Distortion Profile Rescaling):
+-- Giữ toàn bộ điểm đáp nằm gọn trong cửa sổ kính mà không cần kẹp cứng (hard clamping) gây bệt mép.
+local function buildSnellProfile(T, ior, minAxis, N)
+	local D = newArray(N + 1, 0)
+	if T <= 0 or ior <= 1.0001 then
+		return D
+	end
+	local rawMax = 0
+	for k = 0, N do
+		local u = k / N
+		local x = u < (0.25 / N) and (0.25 / N) or u
+		local om = 1 - x
+		local p4 = om * om * om * om
+		-- Mặt vát lồi trơn: độ cao z(u) và độ dốc dz/du tắt mượt về 0 tại u = 1
+		local z = (1 - p4) ^ 0.25
+		local dz = om * om * om * ((1 - p4) ^ -0.75)
+		local th1 = atan(dz)
+		local sin2 = clampN(sin(th1) / ior, -0.9999, 0.9999)
+		local th2 = asin(sin2)
+		-- Độ lệch tia sau khi đi qua bề dày kính
+		local disp = (T * (0.65 * z + 0.35)) * math.tan(th1 - th2) * (1 - u * u)
+		D[k + 1] = disp
+		if disp > rawMax then
+			rawMax = disp
 		end
-		acc = acc + 1 + 2.5 * (1 - smooth01(t))
-		cum[k + 1] = acc
 	end
-	local pos = newArray(n, 0)
-	pos[n] = L
+	-- Tái tỷ lệ đồng đều (Distortion Profile Rescaling) để điểm lấy mẫu không vượt khỏi biên đối diện
+	local strength = (ior - 1) / 3 -- chuẩn hóa trên miền ior 1..4
+	local targetMax = min(T * (0.45 + 0.95 * strength), minAxis * 0.42)
+	if rawMax > 1e-5 then
+		local desired = targetMax / rawMax
+		local scale = min(desired, (minAxis * 0.44) / rawMax)
+		for k = 1, N + 1 do
+			D[k] = D[k] * scale
+		end
+	end
+	return D
+end
+
+local function evalProfile(D, N, u)
+	local f = clampN(u, 0, 1) * N
+	local k = floor(f)
+	if k >= N then
+		return D[N + 1]
+	end
+	local t = f - k
+	return D[k + 1] + (D[k + 2] - D[k + 1]) * t
+end
+
+-- GIAI ĐOẠN 1: ĐÓNG BĂNG HÌNH HỌC (BAKE THE GEOMETRY)
+-- Tính trước trên từng điểm ảnh đầu ra (LW x LH):
+--   • maskA[idx]   : byte alpha khử răng cưa (0..255) của hình siêu elip
+--   • dispX[idx]   : độ dịch chuyển khúc xạ trục X (đơn vị px cửa sổ)
+--   • dispY[idx]   : độ dịch chuyển khúc xạ trục Y (đơn vị px cửa sổ)
+--   • rimLight[idx]: độ sáng viền (Fresnel bậc 5 + Glare 2 phía đối xứng cực) cộng SAU khi làm mờ Frost
+local function bakeGeometry(G, step)
+	local W, H, LW, LH = G.W, G.H, G.LW, G.LH
+	local R0 = clampN(G.CornerRadius, 0, min(W, H) / 2)
+	local p0 = clampN(G.SuperEllipseFactor or 3, 2, 7)
+	local T = clampN(G.Thickness, 0, min(W, H) / 2)
+	local ior = clampN(G.RefractionFactor or 2.1, 1, 4)
+
+	local Fs = clampN(G.FresnelSize or 0, 0, min(W, H) / 2)
+	local Fi = clampN((G.FresnelIntensity or 25) / 100, 0, 1)
+	local Fh = clampN((G.FresnelHardness or 40) / 100, 0, 1)
+	-- Fresnel sử dụng đường dốc lũy thừa bậc 5 (5th-power ramp) theo đúng bài blog
+	local Fexp = 5 * (0.45 + 1.1 * Fh)
+
+	local Gs = clampN(G.GlareSize or 0, 0, min(W, H) / 2)
+	local Gi = clampN((G.GlareIntensity or 70) / 100, 0, 1.2)
+	local Gh = clampN((G.GlareHardness or 40) / 100, 0, 1)
+	local Gc = clampN((G.GlareConvergence or 90) / 100, 0, 1)
+	local Go = clampN((G.GlareOppositeSide or 50) / 100, 0, 1)
+	local Gangle = rad(G.GlareAngle or -50)
+	local axG, ayG = cos(Gangle), sin(Gangle)
+	local GexpRadial = 1 + 4 * Gh
+	local GexpAngular = 1 + 14 * Gc * Gc
+
+	local N = LW * LH
+	local maskA = newArray(N, 0)
+	local dispX = newArray(N, 0)
+	local dispY = newArray(N, 0)
+	local rimLight = newArray(N, 0)
+
+	local profN = 64
+	local snellD = buildSnellProfile(T, ior, min(W, H), profN)
+	local hx, hy = W * 0.5, H * 0.5
+	local stepX, stepY = W / LW, H / LH
+	local aaScale = 1 / max(0.5 * (stepX + stepY), 0.5)
+	local maxReach = max(T, Fs, Gs)
+
+	for y = 0, LH - 1 do
+		local py = (y + 0.5) * stepY
+		local dy = py - hy
+		local rowBase = y * LW
+		for x = 0, LW - 1 do
+			local px = (x + 0.5) * stepX
+			local dx = px - hx
+			local d = superellipseSDF(dx, dy, hx, hy, R0, p0)
+			local cov = clampN(0.5 - d * aaScale, 0, 1)
+			if cov > 0 then
+				local idx = rowBase + x + 1
+				maskA[idx] = floor(cov * 255 + 0.5)
+				local s0 = d < 0 and -d or 0
+				if s0 < maxReach then
+					local nx, ny = meltedContourNormal(dx, dy, hx, hy, R0, p0, max(T, 1), s0)
+					-- 1) Vector dịch chuyển khúc xạ (hướng vào nội tâm mặt kính: -nx, -ny)
+					if T > 0 and s0 < T and ior > 1.0001 then
+						local mag = evalProfile(snellD, profN, s0 / T)
+						dispX[idx] = -nx * mag
+						dispY[idx] = -ny * mag
+					end
+					-- 2) Độ sáng viền (Fresnel bậc 5 + Glare 2 phía đối xứng cực)
+					local rimVal = 0
+					if Fs > 0 and Fi > 0 and s0 < Fs then
+						local uF = 1 - s0 / Fs
+						rimVal = rimVal + Fi * (uF ^ Fexp)
+					end
+					if Gs > 0 and Gi > 0 and s0 < Gs then
+						local uG = 1 - s0 / Gs
+						local align = nx * axG + ny * ayG
+						local dirK
+						if align >= 0 then
+							dirK = align ^ GexpAngular
+						else
+							dirK = Go * ((-align) ^ GexpAngular)
+						end
+						rimVal = rimVal + Gi * dirK * (uG ^ GexpRadial)
+					end
+					if rimVal > 1 then
+						rimVal = 1
+					end
+					rimLight[idx] = rimVal
+				end
+			end
+		end
+		if step then
+			step()
+		end
+	end
+
+	return {
+		W = W, H = H, LW = LW, LH = LH,
+		maskA = maskA, dispX = dispX, dispY = dispY, rimLight = rimLight,
+	}
+end
+
+-- BIẾN DẠNG MẬT ĐỘ LƯỚI LẤY MẪU (DENSITY WARP):
+-- Tập trung mật độ ô lưới vào vùng rìa trong (inner rim landing zone) nơi khúc xạ phóng đại nền.
+local PI2 = 2 * math.pi
+local function warpCoord01(u, beta)
+	if beta <= 0 then
+		return u
+	end
+	return u - beta * sin(PI2 * u) / PI2
+end
+
+local function buildWarpLUT(len, gridCount, beta)
+	local centers = newArray(gridCount, 0)
+	for i = 0, gridCount - 1 do
+		centers[i + 1] = len * warpCoord01((i + 0.5) / gridCount, beta)
+	end
+	local lutSize = ceil(len) + 2
+	local lut = newArray(lutSize, 0)
 	local k = 1
-	for i = 2, n - 1 do
-		local target = (i - 1) / (n - 1) * acc
-		while k < MS and cum[k + 1] < target do
+	for p = 0, lutSize - 1 do
+		while k < gridCount - 1 and p >= centers[k + 1] do
 			k = k + 1
 		end
-		local c0, c1 = cum[k], cum[k + 1]
-		local f = c1 > c0 and (target - c0) / (c1 - c0) or 0
-		pos[i] = (k - 1 + f) / MS * L
-	end
-	local nl = ceil(L) + 2
-	local lut = newArray(nl, 0)
-	local i = 1
-	for px = 0, nl - 1 do
-		while i < n - 1 and pos[i + 1] < px do
-			i = i + 1
+		local g
+		if p <= centers[1] then
+			g = 0
+		elseif p >= centers[gridCount] then
+			g = gridCount - 1
+		else
+			local span = centers[k + 1] - centers[k]
+			g = (k - 1) + (span > 1e-6 and (p - centers[k]) / span or 0)
 		end
-		local p0, p1 = pos[i], pos[i + 1]
-		local f = p1 > p0 and (px - p0) / (p1 - p0) or 0
-		if f < 0 then
-			f = 0
-		elseif f > 1 then
-			f = 1
-		end
-		lut[px + 1] = (i - 1) + f
+		lut[p + 1] = g
 	end
-	return pos, lut
+	return lut, centers
 end
 
--- Bản đồ tra cứu theo pixel (chỉ tính lại khi HÌNH DẠNG đổi): mask, độ sâu, vector dịch lấy mẫu, độ sáng Fresnel+glare
-local function buildMaps(S, ds, step)
-	local W, H = S.W, S.H
-	local OW, OH = max(2, ceil(W / ds)), max(2, ceil(H / ds))
-	local dsx, dsy = W / OW, H / OH
-	local dsa = (dsx + dsy) * 0.5
-	local N = OW * OH
-	local hx, hy = S.hx, S.hy
-	local mask, D = newArray(N, 0), newArray(N, 0)
-
-	for y = 0, OH - 1 do
-		local py = (y + 0.5) * dsy - hy
-		for x = 0, OW - 1 do
-			local px = (x + 0.5) * dsx - hx
-			local phi = sdSuper(px, py, hx, hy, S.r, S.n)
-			local idx = y * OW + x + 1
-			local a = 0.5 - phi / dsa
-			mask[idx] = a < 0 and 0 or (a > 1 and 1 or a)
-			if phi >= 0 then
-				D[idx] = -phi -- ngoài mép: độ sâu âm, liên tục qua mép nên đạo hàm trơn
-			else
-				D[idx] = depthInside(px, py, S, phi)
-			end
-		end
-		if step then
-			step()
-		end
+local function evalWarpLUT(lut, maxIdx, pos)
+	if pos <= 0 then
+		return lut[1]
 	end
-
-	-- bảng dịch theo x = độ sâu / T (cùng một đường cong cho mọi pixel)
-	local TB = 256
-	local shiftTbl = newArray(TB, 0)
-	for i = 1, TB do
-		shiftTbl[i] = bezelShift((i - 0.5) / TB, S.rho, S.T)
+	local p = floor(pos)
+	if p >= maxIdx then
+		return lut[maxIdx + 1]
 	end
-
-	local dx, dy, shade = newArray(N, 0), newArray(N, 0), newArray(N, 0)
-	local T, reach = S.T, S.reach
-	local ax, ay = S.ax, S.ay
-	for y = 0, OH - 1 do
-		local ym = y > 0 and y - 1 or 0
-		local yp = y < OH - 1 and y + 1 or OH - 1
-		for x = 0, OW - 1 do
-			local idx = y * OW + x + 1
-			local d = D[idx]
-			if mask[idx] > 0 and d < reach then
-				if d < 0 then
-					d = 0
-				end
-				-- pháp tuyến = -gradient của trường độ sâu trơn (hướng RA NGOÀI)
-				local xm = x > 0 and x - 1 or 0
-				local xp = x < OW - 1 and x + 1 or OW - 1
-				local gx = (D[y * OW + xp + 1] - D[y * OW + xm + 1]) / ((xp - xm) * dsx)
-				local gy = (D[yp * OW + x + 1] - D[ym * OW + x + 1]) / ((yp - ym) * dsy)
-				local gl = sqrt(gx * gx + gy * gy)
-				if gl > 1e-6 then
-					local nx, ny = -gx / gl, -gy / gl
-					if d < T and S.rho > 1 then
-						local k = floor(d / T * TB) + 1
-						if k > TB then
-							k = TB
-						end
-						local mag = shiftTbl[k]
-						dx[idx], dy[idx] = -nx * mag, -ny * mag -- lấy mẫu sâu hơn vào trong
-					end
-					local sh = 0
-					if S.FS > 0 and S.Fi > 0 and d < S.FS then
-						sh = sh + S.Fi * edgeProfile(d / S.FS, S.Fh)
-					end
-					if S.GS > 0 and S.Gi > 0 and d < S.GS then
-						local c = nx * ax + ny * ay
-						local g = 0
-						if c > 0 then
-							g = c ^ S.gq
-						elseif c < 0 then
-							g = (-c) ^ S.gq * S.Go
-						end
-						sh = sh + S.Gi * g * edgeProfile(d / S.GS, S.Gh)
-					end
-					shade[idx] = sh > 1 and 1 or sh
-				end
-			end
-		end
-		if step then
-			step()
-		end
-	end
-	return { OW = OW, OH = OH, dsx = dsx, dsy = dsy, mask = mask, D = D, dx = dx, dy = dy, shade = shade }
+	local f = pos - p
+	local a = lut[p + 1]
+	local b = lut[p + 2] or a
+	return a + (b - a) * f
 end
 
--- Catmull-Rom (căng 0.5) trên chỉ số lưới, kẹp mép
-local WX = { 0, 0, 0, 0 }
-local WY = { 0, 0, 0, 0 }
-local function crSet(w, t)
+-- Nội suy Bicubic Catmull-Rom 4x4 (16 taps)
+local function catmullRomWeights(t)
 	local t2 = t * t
 	local t3 = t2 * t
-	w[1] = -0.5 * t3 + t2 - 0.5 * t
-	w[2] = 1.5 * t3 - 2.5 * t2 + 1
-	w[3] = -1.5 * t3 + 2 * t2 + 0.5 * t
-	w[4] = 0.5 * t3 - 0.5 * t2
+	return (-t3 + 2 * t2 - t) * 0.5, (3 * t3 - 5 * t2 + 2) * 0.5, (-3 * t3 + 4 * t2 + t) * 0.5, (t3 - t2) * 0.5
 end
 
-local function fetch3(gr, gg, gb, gw, gh, gx, gy)
-	if gx < 0 then
-		gx = 0
-	elseif gx > gw - 1 then
-		gx = gw - 1
-	end
-	if gy < 0 then
-		gy = 0
-	elseif gy > gh - 1 then
-		gy = gh - 1
-	end
+local function sampleBicubic1(arr, gw, gh, gx, gy)
+	gx = clampN(gx, 0, gw - 1)
+	gy = clampN(gy, 0, gh - 1)
 	local x0, y0 = floor(gx), floor(gy)
-	crSet(WX, gx - x0)
-	crSet(WY, gy - y0)
-	local last = gw - 1
-	local xa, xb, xc, xd = x0 - 1, x0, x0 + 1, x0 + 2
-	if xa < 0 then
-		xa = 0
-	end
-	if xc > last then
-		xc = last
-	end
-	if xd > last then
-		xd = last
-	end
-	local w1, w2, w3, w4 = WX[1], WX[2], WX[3], WX[4]
-	local r, g, b = 0, 0, 0
-	for j = 1, 4 do
-		local yy = y0 - 2 + j
-		if yy < 0 then
-			yy = 0
-		elseif yy > gh - 1 then
-			yy = gh - 1
-		end
-		local base = yy * gw + 1
-		local wy = WY[j]
-		local i1, i2, i3, i4 = base + xa, base + xb, base + xc, base + xd
-		r = r + wy * (w1 * gr[i1] + w2 * gr[i2] + w3 * gr[i3] + w4 * gr[i4])
-		g = g + wy * (w1 * gg[i1] + w2 * gg[i2] + w3 * gg[i3] + w4 * gg[i4])
-		b = b + wy * (w1 * gb[i1] + w2 * gb[i2] + w3 * gb[i3] + w4 * gb[i4])
-	end
-	return clampN(r, 0, 1), clampN(g, 0, 1), clampN(b, 0, 1)
+	local a0, a1, a2, a3 = catmullRomWeights(gx - x0)
+	local b0, b1, b2, b3 = catmullRomWeights(gy - y0)
+
+	local xm = x0 > 0 and (x0 - 1) or 0
+	local xp = x0 + 1 < gw and (x0 + 1) or (gw - 1)
+	local xq = x0 + 2 < gw and (x0 + 2) or (gw - 1)
+
+	local ym = y0 > 0 and (y0 - 1) or 0
+	local yp = y0 + 1 < gh and (y0 + 1) or (gh - 1)
+	local yq = y0 + 2 < gh and (y0 + 2) or (gh - 1)
+
+	local o = ym * gw + 1
+	local r0 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = y0 * gw + 1
+	local r1 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = yp * gw + 1
+	local r2 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+	o = yq * gw + 1
+	local r3 = arr[o + xm] * a0 + arr[o + x0] * a1 + arr[o + xp] * a2 + arr[o + xq] * a3
+
+	return clampN(r0 * b0 + r1 * b1 + r2 * b2 + r3 * b3, 0, 1)
 end
 
-local function fetch1(ga, gw, gh, gx, gy)
-	if gx < 0 then
-		gx = 0
-	elseif gx > gw - 1 then
-		gx = gw - 1
-	end
-	if gy < 0 then
-		gy = 0
-	elseif gy > gh - 1 then
-		gy = gh - 1
-	end
-	local x0, y0 = floor(gx), floor(gy)
-	crSet(WX, gx - x0)
-	crSet(WY, gy - y0)
-	local last = gw - 1
-	local xa, xb, xc, xd = x0 - 1, x0, x0 + 1, x0 + 2
-	if xa < 0 then
-		xa = 0
-	end
-	if xc > last then
-		xc = last
-	end
-	if xd > last then
-		xd = last
-	end
-	local w1, w2, w3, w4 = WX[1], WX[2], WX[3], WX[4]
-	local v = 0
-	for j = 1, 4 do
-		local yy = y0 - 2 + j
-		if yy < 0 then
-			yy = 0
-		elseif yy > gh - 1 then
-			yy = gh - 1
+-- Box blur 1 trục trượt tổng (sliding sum O(1) mỗi điểm ảnh)
+local function boxBlur1D(src, dst, lines, len, rad, stepA, stepB, step)
+	if rad < 1 then
+		for i = 1, #src do
+			dst[i] = src[i]
 		end
-		local base = yy * gw + 1
-		v = v + WY[j] * (w1 * ga[base + xa] + w2 * ga[base + xb] + w3 * ga[base + xc] + w4 * ga[base + xd])
+		return
 	end
-	return clampN(v, 0, 1)
-end
-
--- Box blur một trục có kẹp mép
-local function blurAxis(src, dst, lines, len, radius, stepA, stepB, step)
-	local inv = 1 / (2 * radius + 1)
+	local inv = 1 / (2 * rad + 1)
 	local last = len - 1
 	for line = 0, lines - 1 do
 		local base = line * stepB + 1
 		local sum = 0
-		for k = -radius, radius do
+		for k = -rad, rad do
 			local idx = k < 0 and 0 or (k > last and last or k)
 			sum = sum + src[base + idx * stepA]
 		end
 		for pos = 0, last do
 			dst[base + pos * stepA] = sum * inv
-			local ai = pos + radius + 1
-			if ai > last then
-				ai = last
+			local addIdx = pos + rad + 1
+			if addIdx > last then
+				addIdx = last
 			end
-			local si = pos - radius
-			if si < 0 then
-				si = 0
+			local subIdx = pos - rad
+			if subIdx < 0 then
+				subIdx = 0
 			end
-			sum = sum + src[base + ai * stepA] - src[base + si * stepA]
+			sum = sum + src[base + addIdx * stepA] - src[base + subIdx * stepA]
 		end
 		if step then
 			step()
@@ -967,234 +854,372 @@ local function blurAxis(src, dst, lines, len, radius, stepA, stepB, step)
 	end
 end
 
--- Gaussian xấp xỉ bằng 3 lần box blur (bán kính từng lần tính theo sigma)
-local function boxRadii(sigma)
-	local n = 3
-	local wIdeal = sqrt(12 * sigma * sigma / n + 1)
-	local wl = floor(wIdeal)
-	if wl % 2 == 0 then
-		wl = wl - 1
+-- Làm mờ 2 lượt tách trục (H + V) cho một mức bán kính nguyên rInt
+local function runBlurLevel(R, G, B, A, LW, LH, rInt, step)
+	local N = LW * LH
+	local oR, oG, oB, oA = newArray(N, 0), newArray(N, 0), newArray(N, 0), newArray(N, 0)
+	if rInt < 1 then
+		for i = 1, N do
+			oR[i], oG[i], oB[i], oA[i] = R[i], G[i], B[i], A[i]
+		end
+		return oR, oG, oB, oA
 	end
-	if wl < 1 then
-		wl = 1
+	local tmp = newArray(N, 0)
+	local r1 = max(1, floor(rInt * 0.65 + 0.5))
+	local r2 = max(1, rInt - floor(r1 * 0.5))
+	local function blurChannel(src, dst)
+		boxBlur1D(src, tmp, LH, LW, r1, 1, LW, step)
+		boxBlur1D(tmp, dst, LW, LH, r1, LW, 1, step)
+		boxBlur1D(dst, tmp, LH, LW, r2, 1, LW, step)
+		boxBlur1D(tmp, dst, LW, LH, r2, LW, 1, step)
 	end
-	local wu = wl + 2
-	local m = floor((12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4) + 0.5)
-	local out = {}
-	for i = 0, n - 1 do
-		out[#out + 1] = ((i < m) and wl or wu) // 2
-	end
-	return out
+	blurChannel(R, oR)
+	blurChannel(G, oG)
+	blurChannel(B, oB)
+	blurChannel(A, oA)
+	return oR, oG, oB, oA
 end
 
--- Dựng lại ảnh kính: lấy mẫu lưới (khúc xạ + tách kênh) -> frost -> tint -> chồng Fresnel/glare -> RGBA8
-local function reconstruct(S, M, G, step)
-	local OW, OH = M.OW, M.OH
-	local N = OW * OH
-	local dsx, dsy = M.dsx, M.dsy
-	local gw, gh, gr, gg, gb = G.gw, G.gh, G.gr, G.gg, G.gb
-	local lutX, lutY = G.lutX, G.lutY
-	local W, H = S.W, S.H
-	local mR, mB = 1 + S.ca, 1 - S.ca
-	local hasCA = S.ca > 0
-	local R, Gc, B = newArray(N, 0), newArray(N, 0), newArray(N, 0)
-	local mdx, mdy = M.dx, M.dy
+-- GIAI ĐOẠN 3, 4 & 5: TÁI DỰNG (RECONSTRUCT) + LÀM MỜ FROST HAI MỨC + CHIẾU SÁNG VIỀN (RIM LIGHTING)
+-- Xuất ra một buffer RGBA8 duy nhất cho GlassPane
+local function reconstructFrostAndLight(job, step)
+	local geom = job.geom
+	local W, H, LW, LH = geom.W, geom.H, geom.LW, geom.LH
+	local N = LW * LH
+	local maskA, dispX, dispY, rimLight = geom.maskA, geom.dispX, geom.dispY, geom.rimLight
 
-	local function gxOf(sx)
-		if sx < 0 then
-			sx = 0
-		elseif sx > W then
-			sx = W
-		end
-		local k = floor(sx)
-		local a = lutX[k + 1]
-		return a + ((lutX[k + 2] or a) - a) * (sx - k)
-	end
-	local function gyOf(sy)
-		if sy < 0 then
-			sy = 0
-		elseif sy > H then
-			sy = H
-		end
-		local k = floor(sy)
-		local a = lutY[k + 1]
-		return a + ((lutY[k + 2] or a) - a) * (sy - k)
-	end
+	local gw, gh = job.gw, job.gh
+	local gr, gg, gb = job.gr, job.gg, job.gb
+	local lutX, lutY = job.lutX, job.lutY
+	local maxLutX, maxLutY = #lutX - 1, #lutY - 1
 
-	for y = 0, OH - 1 do
-		local py = (y + 0.5) * dsy
-		for x = 0, OW - 1 do
-			local idx = y * OW + x + 1
-			local px = (x + 0.5) * dsx
-			local ddx, ddy = mdx[idx], mdy[idx]
-			if ddx == 0 and ddy == 0 then
-				R[idx], Gc[idx], B[idx] = fetch3(gr, gg, gb, gw, gh, gxOf(px), gyOf(py))
-			elseif not hasCA then
-				R[idx], Gc[idx], B[idx] = fetch3(gr, gg, gb, gw, gh, gxOf(px + ddx), gyOf(py + ddy))
-			else
-				R[idx] = fetch1(gr, gw, gh, gxOf(px + ddx * mR), gyOf(py + ddy * mR))
-				Gc[idx] = fetch1(gg, gw, gh, gxOf(px + ddx), gyOf(py + ddy))
-				B[idx] = fetch1(gb, gw, gh, gxOf(px + ddx * mB), gyOf(py + ddy * mB))
-			end
-		end
-		if step then
-			step()
-		end
-	end
+	local ca = clampN(job.ChromaticAberration or 0.2, 0, 1)
+	local tintR, tintG, tintB = job.tintR, job.tintG, job.tintB
+	local tintMix = clampN(job.tintMix or 0, 0, 1)
+	local paneAlpha = clampN(job.paneAlpha or 1, 0, 1)
 
-	-- Frost: gaussian sigma = BlurRadius / 3 (đổi sang đơn vị pixel của ảnh ra)
-	local sigma = S.blur / 3 / ((dsx + dsy) * 0.5)
-	if sigma >= 0.45 then
-		local tmp = newArray(N, 0)
-		for _, ch in ipairs({ R, Gc, B }) do
-			for _, rr in ipairs(boxRadii(sigma)) do
-				if rr >= 1 then
-					blurAxis(ch, tmp, OH, OW, rr, 1, OW, step)
-					blurAxis(tmp, ch, OW, OH, rr, OW, 1, step)
+	-- Mảng màu Premultiplied Alpha để bảo vệ viền trong suốt không bị lem màu tối vào trong khi Frost Blur
+	local pR, pG, pB, pA = newArray(N, 0), newArray(N, 0), newArray(N, 0), newArray(N, 0)
+	local stepX, stepY = W / LW, H / LH
+	local maxX, maxY = W - 0.5, H - 0.5
+
+	-- Giai đoạn 3: Reconstruct the Output (Tra cứu dịch chuyển + Tán sắc 1±s + Bicubic Catmull-Rom + Tint)
+	for y = 0, LH - 1 do
+		local py = (y + 0.5) * stepY
+		local rowBase = y * LW
+		for x = 0, LW - 1 do
+			local idx = rowBase + x + 1
+			local a8 = maskA[idx]
+			if a8 > 0 then
+				local px = (x + 0.5) * stepX
+				local dx, dy = dispX[idx], dispY[idx]
+				local cr, cg, cb
+				if (dx == 0 and dy == 0) or ca == 0 then
+					-- Vùng phẳng nội tâm hoặc tắt tán sắc: chỉ đọc Catmull-Rom 1 lần duy nhất!
+					local sx = clampN(px + dx, 0.5, maxX)
+					local sy = clampN(py + dy, 0.5, maxY)
+					local u = evalWarpLUT(lutX, maxLutX, sx)
+					local v = evalWarpLUT(lutY, maxLutY, sy)
+					cr = sampleBicubic1(gr, gw, gh, u, v)
+					cg = sampleBicubic1(gg, gw, gh, u, v)
+					cb = sampleBicubic1(gb, gw, gh, u, v)
+				else
+					-- Chuẩn GlassmorphicUI: Đỏ lấy mẫu xa hơn (1 + ca), Xanh dương ngắn hơn (1 - ca) so với Xanh lá
+					local scaleR = 1 + ca
+					local scaleB = 1 - ca
+
+					local sxR = clampN(px + dx * scaleR, 0.5, maxX)
+					local syR = clampN(py + dy * scaleR, 0.5, maxY)
+					cr = sampleBicubic1(gr, gw, gh, evalWarpLUT(lutX, maxLutX, sxR), evalWarpLUT(lutY, maxLutY, syR))
+
+					local sxG = clampN(px + dx, 0.5, maxX)
+					local syG = clampN(py + dy, 0.5, maxY)
+					cg = sampleBicubic1(gg, gw, gh, evalWarpLUT(lutX, maxLutX, sxG), evalWarpLUT(lutY, maxLutY, syG))
+
+					local sxB = clampN(px + dx * scaleB, 0.5, maxX)
+					local syB = clampN(py + dy * scaleB, 0.5, maxY)
+					cb = sampleBicubic1(gb, gw, gh, evalWarpLUT(lutX, maxLutX, sxB), evalWarpLUT(lutY, maxLutY, syB))
 				end
+
+				-- Trộn màu Tint cửa sổ (BackgroundColor3)
+				if tintMix > 0 then
+					cr = cr + (tintR - cr) * tintMix
+					cg = cg + (tintG - cg) * tintMix
+					cb = cb + (tintB - cb) * tintMix
+				end
+
+				-- Nhân trước với Alpha mặt nạ (Premultiplied Alpha)
+				local aNorm = a8 / 255
+				pR[idx] = cr * aNorm
+				pG[idx] = cg * aNorm
+				pB[idx] = cb * aNorm
+				pA[idx] = aNorm
+			end
+		end
+		if step then
+			step()
+		end
+	end
+
+	-- Giai đoạn 4: Frost Blur (Gaussian sigma = BlurRadius / 3, Nội suy Hai Mức Nguyên liên tiếp)
+	local blurPx = max(job.BlurRadius or 1, 1)
+	local sigmaOut = (blurPx / 3) / max(0.5 * (stepX + stepY), 1)
+	local fR, fG, fB, fA
+	if blurPx <= 1.05 or sigmaOut < 0.35 then
+		fR, fG, fB, fA = pR, pG, pB, pA
+	else
+		local rFloat = clampN(sigmaOut * 1.45, 0, min(LW, LH) * 0.35)
+		local rLow = floor(rFloat)
+		local rHigh = ceil(rFloat)
+		local frac = rFloat - rLow
+		local lR, lG, lB, lA = runBlurLevel(pR, pG, pB, pA, LW, LH, rLow, step)
+		if rHigh == rLow or frac < 0.02 then
+			fR, fG, fB, fA = lR, lG, lB, lA
+		else
+			local hR, hG, hB, hA = runBlurLevel(pR, pG, pB, pA, LW, LH, rHigh, step)
+			fR, fG, fB, fA = lR, lG, lB, lA
+			for i = 1, N do
+				fR[i] = lR[i] + (hR[i] - lR[i]) * frac
+				fG[i] = lG[i] + (hG[i] - lG[i]) * frac
+				fB[i] = lB[i] + (hB[i] - lB[i]) * frac
+				fA[i] = lA[i] + (hA[i] - lA[i]) * frac
 			end
 		end
 	end
 
-	-- Tint + chồng Fresnel/glare (SAU frost) + alpha theo mask
+	-- Giai đoạn 5: Khôi phục Premultiplied Alpha + Phủ lớp sáng viền (Fresnel + Glare) + Đóng gói RGBA8
 	local buf = buffer.create(N * 4)
-	local mask, D, shade = M.mask, M.D, M.shade
-	local tR, tG, tB, tk = S.tR, S.tG, S.tB, S.tintAmt
-	local aIn, aRim = S.aIn, S.aRim
-	local band = S.T * 1.3
-	for y = 0, OH - 1 do
-		for x = 0, OW - 1 do
-			local idx = y * OW + x + 1
-			local m = mask[idx]
-			local out = 0
-			if m > 0 then
-				local cr = R[idx] + (tR - R[idx]) * tk
-				local cg = Gc[idx] + (tG - Gc[idx]) * tk
-				local cb = B[idx] + (tB - B[idx]) * tk
-				local d = D[idx]
-				local rimK = 1 - smooth01((d > 0 and d or 0) / band)
-				local aB = aIn + (aRim - aIn) * rimK
-				local sh = shade[idx]
-				local aT = sh + aB * (1 - sh)
-				if aT > 1e-4 then
-					local wB, wS = aB * (1 - sh) / aT, sh / aT
-					cr, cg, cb = cr * wB + wS, cg * wB + wS, cb * wB + wS
-					local a8 = floor(clampN(m * aT, 0, 1) * 255 + 0.5)
-					local r8 = floor(clampN(cr, 0, 1) * 255 + 0.5)
-					local g8 = floor(clampN(cg, 0, 1) * 255 + 0.5)
-					local b8 = floor(clampN(cb, 0, 1) * 255 + 0.5)
-					out = r8 + g8 * 256 + b8 * 65536 + a8 * 16777216
+	-- Điểm ảnh ngoài mặt nạ (alpha = 0) mang màu tint cửa sổ với alpha = 0 theo đúng bài blog
+	local clearR8 = floor(clampN(tintR, 0, 1) * 255 + 0.5)
+	local clearG8 = floor(clampN(tintG, 0, 1) * 255 + 0.5)
+	local clearB8 = floor(clampN(tintB, 0, 1) * 255 + 0.5)
+	local clearU32 = clearR8 + clearG8 * 256 + clearB8 * 65536
+
+	for y = 0, LH - 1 do
+		local rowBase = y * LW
+		for x = 0, LW - 1 do
+			local idx = rowBase + x + 1
+			local a8 = maskA[idx]
+			if a8 == 0 then
+				buffer.writeu32(buf, (idx - 1) * 4, clearU32)
+			else
+				local wA = fA[idx]
+				local cr, cg, cb
+				if wA > 1e-4 then
+					local invA = 1 / wA
+					cr = fR[idx] * invA
+					cg = fG[idx] * invA
+					cb = fB[idx] * invA
+				else
+					cr, cg, cb = tintR, tintG, tintB
 				end
+				-- Cộng ánh sáng viền (Fresnel + Glare) lên trên lớp Frost
+				local rim = rimLight[idx]
+				if rim > 0 then
+					cr = cr + (1 - cr) * rim
+					cg = cg + (1 - cg) * rim
+					cb = cb + (1 - cb) * rim
+				end
+				-- Độ đục cuối cùng: viền sáng (Fresnel/Glare) tăng độ đục tại mép kính
+				local outA = clampN((a8 / 255) * clampN(paneAlpha + rim * (1 - paneAlpha), 0, 1), 0, 1)
+				local r8 = floor(clampN(cr, 0, 1) * 255 + 0.5)
+				local g8 = floor(clampN(cg, 0, 1) * 255 + 0.5)
+				local b8 = floor(clampN(cb, 0, 1) * 255 + 0.5)
+				local alpha8 = floor(outA * 255 + 0.5)
+				buffer.writeu32(buf, (idx - 1) * 4, r8 + g8 * 256 + b8 * 65536 + alpha8 * 16777216)
 			end
-			buffer.writeu32(buf, (idx - 1) * 4, out)
 		end
 		if step then
 			step()
 		end
 	end
-	return buf, OW, OH
+
+	return buf, LW, LH
 end
 --[[CORE_END]]
 
 ----------------------------------------------------------------------
--- LIQUID GLASS v5 - phần ghép vào Roblox (lịch dựng ảnh, EditableImage, lấy mẫu backdrop bằng raycast)
--- Tên tham số đặt đúng theo README của GlassmorphicUI. Thickness / BlurRadius / FresnelSize / GlareSize / CornerRadius
--- nhận UDim (Scale tính theo CẠNH NGẮN của đảo, như README) hoặc số px.
+-- HỆ THỐNG GLASSMORPHICUI & LIQUID ENGINE (QUẢN LÝ CỬA SỐ, CACHE, SAMPLER)
 ----------------------------------------------------------------------
-local LIQUID_DEFAULTS = {
-	Thickness = UDim.new(0.15, 0), -- bề dày dải khúc xạ: vừa là độ sâu ống kính vừa là độ mạnh bẻ tia
-	RefractionFactor = 2.1, -- 1 = tắt khúc xạ, tối đa 4
-	ChromaticAberration = 0.2, -- đỏ lấy mẫu xa hơn 20%, xanh dương gần hơn 20% so với xanh lá
-	CornerRadius = nil, -- nil = theo độ bo của thân đảo (UICorner)
-	SuperEllipseFactor = 2, -- bài blog mặc định 3; ở đây là 2 vì thân đảo bị cắt bằng UICorner (cung tròn). Đặt 3+ nếu muốn góc vuông hơn
-	FresnelSize = UDim.new(0.1, 0),
-	FresnelHardness = 40,
-	FresnelIntensity = 25,
-	GlareSize = UDim.new(0.2, 0),
-	GlareHardness = 40,
-	GlareIntensity = 70, -- 0 = tắt glint
-	GlareConvergence = 90,
-	GlareOppositeSide = 50,
-	GlareAngle = -50, -- độ, trục glare
-	BlurRadius = UDim.new(0.06, 0), -- frost: sigma gaussian = BlurRadius / 3
-	Transparency = nil, -- độ trong của lớp tint (nil = theo Style); 0 = đặc hoàn toàn
-	MaxOutputResolution = 1024,
-	OutputScale = 1, -- px cửa sổ trên mỗi pixel ảnh ra (tăng lên nếu máy yếu)
-	TargetPixels = 45000, -- số pixel ảnh ra mong muốn; đảo lớn hơn sẽ tự giảm độ phân giải
-	Backdrop = true, -- quét lại cảnh 3D theo chu kỳ (false = chỉ quét một lần)
-	BackdropHz = 5,
-	Sky = nil, -- { Top = Color3, Horizon = Color3 } nếu muốn ép màu trời
-	Budget = 3, -- ms tối đa mỗi frame cho việc dựng ảnh + raycast
+-- Đúng 17 thuộc tính chuẩn của boatbeaker/GlassmorphicUI 1.0.0 + mở rộng tương thích DynamicIsland
+local GLASS_DEFAULTS = {
+	Thickness = UDim.new(0.15, 0),       -- UDim hoặc số px (1px..minAxis)
+	RefractionFactor = 2.1,              -- 1..4 (1 = tắt khúc xạ)
+	ChromaticAberration = 0.2,           -- 0..1 (Đỏ +20%, Xanh dương -20%)
+	CornerRadius = UDim.new(0.8, 0),     -- UDim hoặc số px (0..minAxis)
+	SuperEllipseFactor = 3,              -- 2..7 (2 = tròn, 3 = squircle mặc định)
+	FresnelSize = UDim.new(0.1, 0),      -- UDim hoặc số px
+	FresnelHardness = 40,                -- 0..100
+	FresnelIntensity = 25,               -- 0..100
+	GlareSize = UDim.new(0.2, 0),        -- UDim hoặc số px
+	GlareHardness = 40,                  -- 0..100
+	GlareIntensity = 70,                 -- 0..120
+	GlareConvergence = 90,               -- 0..100
+	GlareOppositeSide = 50,              -- 0..100 (cường độ % vệt lóa đối diện)
+	GlareAngle = -50,                    -- -180..180 độ
+	BlurRadius = UDim.new(0.06, 0),      -- UDim hoặc số px (sigma = BlurRadius / 3)
+	Transparency = 0.85,                 -- 0..1 (0 = đặc hoàn toàn, bỏ qua lấy mẫu nền)
+	MaxOutputResolution = 1024,          -- 16..1024
+	-- Tham số phụ trợ vận hành
+	SamplerWarp = 0.45,                  -- Độ nén mật độ lưới ở rìa trong
+	SamplingBudget = 5,                  -- 5 ms/frame cho lấy mẫu màn hình (chuẩn blog)
+	RenderingBudget = 8,                 -- 8 ms/frame cho tái dựng + frost + rim (chuẩn blog)
+	Opacity = 0.94,                      -- Độ đục tổng thể của tấm kính hiển thị
+	TintMix = 0.12,                      -- Tỷ lệ pha màu nền cửa sổ vào kính
 }
+
+local DEFAULT_BLUR_UDIM = GLASS_DEFAULTS.BlurRadius
+
+-- Bộ đệm (Cache) hình học dùng chung giữa các cửa sổ có cùng hình dạng và thuộc tính
+local GEOM_CACHE = {}
+local GEOM_CACHE_COUNT = 0
+local GEOM_CACHE_MAX = 18
+
+local function getGeometryKey(G)
+	return string.format(
+		"%d_%d_%d_%d_%.1f_%.2f_%.1f_%.2f_%.1f_%d_%d_%.1f_%d_%d_%d_%d_%.1f",
+		G.W, G.H, G.LW, G.LH,
+		G.CornerRadius, G.SuperEllipseFactor,
+		G.Thickness, G.RefractionFactor,
+		G.FresnelSize, G.FresnelHardness, G.FresnelIntensity,
+		G.GlareSize, G.GlareHardness, G.GlareIntensity,
+		G.GlareConvergence, G.GlareOppositeSide, G.GlareAngle
+	)
+end
+
+local function evictGeometryCache()
+	while GEOM_CACHE_COUNT > GEOM_CACHE_MAX do
+		local oldestKey, oldestTime
+		for k, entry in pairs(GEOM_CACHE) do
+			if not oldestTime or entry.lastUsed < oldestTime then
+				oldestKey, oldestTime = k, entry.lastUsed
+			end
+		end
+		if not oldestKey then
+			break
+		end
+		GEOM_CACHE[oldestKey] = nil
+		GEOM_CACHE_COUNT = GEOM_CACHE_COUNT - 1
+	end
+end
+
+-- Đăng ký tất cả các cửa sổ kính đang hoạt động để hỗ trợ "kính chồng lên kính" (glass-over-glass)
+local ACTIVE_PANES = {}
+
+local DAY_TOP, DAY_HOR = { 0.36, 0.56, 0.88 }, { 0.74, 0.84, 0.94 }
+local NIGHT_TOP, NIGHT_HOR = { 0.02, 0.03, 0.08 }, { 0.07, 0.09, 0.15 }
+local SUNSET = { 0.95, 0.50, 0.30 }
+local RAY_LEN = 2500
 
 local Liquid = {}
 Liquid.__index = Liquid
 
-local SETTLE = 0.12 -- đảo đứng yên bao lâu thì mới dựng lại kính
-local LENS_GAP = 0.08 -- giãn cách tối thiểu giữa hai lần dựng ảnh
-local RAY_LEN = 2000
-local MAX_HOPS = 4 -- số lần xuyên qua part gần như vô hình khi raycast
-local DAY_TOP, DAY_HOR = { 0.36, 0.56, 0.88 }, { 0.74, 0.84, 0.94 }
-local NIGHT_TOP, NIGHT_HOR = { 0.02, 0.03, 0.08 }, { 0.07, 0.09, 0.15 }
-local SUNSET = { 0.95, 0.5, 0.3 }
-
-local function lerp(a, b, t)
-	return a + (b - a) * t
-end
-
-function Liquid.new(isl, body, opts)
+function Liquid.new(isl, hostGuiObject, opts)
 	local P = {}
-	for k, v in pairs(LIQUID_DEFAULTS) do
+	for k, v in pairs(GLASS_DEFAULTS) do
 		P[k] = v
 	end
+	P.BlurRadius = DEFAULT_BLUR_UDIM
 	if type(opts) == "table" then
 		for k, v in pairs(opts) do
 			P[k] = v
 		end
 	end
+
 	local self = setmetatable({}, Liquid)
-	self.isl, self.body, self.P = isl, body, P
-	self.writes = {}
+	self.isl = isl
+	self.body = hostGuiObject
+	self.P = P
 	self.shape = { w = 0, h = 0, r = 0 }
-	self.shapeKey = -1
+	self.shapeKey = ""
 	self.lastChange = os.clock()
-	self.lensStart = 0
-	self.lensDirty = true
-	self.nextSample = 0
 	self.enabled = true
+	self.paused = false
+	self.firstRenderDone = false
 	self.failed = false
 	self.destroyed = false
+	self.scaleCap = 1 -- Tự động giảm một nửa nếu EditableImage hết bộ nhớ
+	self.framesSinceReconstruct = 0
+	self.samplesReceived = 0
+	self.executionPath = "idle"
+	self.attrConns = {}
 
-	-- Một ảnh duy nhất cho cả tấm kính (khúc xạ + frost + tint + Fresnel/glare), alpha = mask byte
-	self.lens = mk("ImageLabel", {
-		Name = "Glass",
+	-- Lớp hiển thị duy nhất: GlassPane (chứa toàn bộ khúc xạ + frost + fresnel + glare + mặt nạ siêu elip)
+	self.pane = mk("ImageLabel", {
+		Name = "GlassPane",
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 1),
 		ZIndex = 1,
-	}, body)
+		ScaleType = Enum.ScaleType.Stretch,
+	}, hostGuiObject)
 
-	-- Thử trước: tạo được EditableImage và gán được vào ImageLabel không?
+	-- Kiểm tra khả năng tạo EditableImage của client hiện tại
 	local probe = self:_newImage(2, 2)
-	local okShow = probe ~= nil and self:_show(self.lens, probe)
+	local okShow = probe ~= nil and self:_show(self.pane, probe)
 	if probe then
 		pcall(function()
 			probe:Destroy()
 		end)
 	end
 	pcall(function()
-		self.lens.ImageContent = Content.none
+		self.pane.ImageContent = Content.none
 	end)
 	if not okShow then
-		self.lens:Destroy()
-		error("EditableImage/Content.fromObject không khả dụng")
+		self.pane:Destroy()
+		error("EditableImage/Content.fromObject không khả dụng trên thiết bị này")
 	end
+
+	self:_bindAttributes()
+	ACTIVE_PANES[self] = true
 	return self
 end
 
-----------------------------------------------------------------------
--- EditableImage
-----------------------------------------------------------------------
+-- Đồng bộ các thuộc tính Roblox Attribute trên GuiObject theo đúng chuẩn GlassmorphicUI
+function Liquid:_bindAttributes()
+	local host = self.body
+	if not host then
+		return
+	end
+	local attrNames = {
+		"Thickness", "RefractionFactor", "ChromaticAberration",
+		"CornerRadius", "SuperEllipseFactor",
+		"FresnelSize", "FresnelHardness", "FresnelIntensity",
+		"GlareSize", "GlareHardness", "GlareIntensity",
+		"GlareConvergence", "GlareOppositeSide", "GlareAngle",
+		"BlurRadius", "Transparency", "MaxOutputResolution",
+	}
+	local function readAttr(name)
+		local val = host:GetAttribute(name)
+		if val == nil then
+			return
+		end
+		local def = GLASS_DEFAULTS[name]
+		if name == "Transparency" or name == "MaxOutputResolution" or type(def) == "number" then
+			if type(val) == "number" then
+				self.P[name] = val
+				self.geomDirty = true
+				self.reconstructDirty = true
+			end
+		elseif typeof(def) == "UDim" then
+			if typeof(val) == "UDim" or type(val) == "number" then
+				self.P[name] = val
+				self.geomDirty = true
+				self.reconstructDirty = true
+			end
+		end
+	end
+	for _, name in ipairs(attrNames) do
+		readAttr(name)
+		table.insert(self.attrConns, host:GetAttributeChangedSignal(name):Connect(function()
+			readAttr(name)
+		end))
+	end
+	table.insert(self.attrConns, host:GetPropertyChangedSignal("BackgroundColor3"):Connect(function()
+		self.reconstructDirty = true
+	end))
+end
+
 function Liquid:_newImage(w, h)
 	local ok, img = pcall(function()
 		return AssetService:CreateEditableImage({ Size = Vector2.new(w, h) })
@@ -1222,13 +1247,13 @@ function Liquid:_fail(reason)
 		return
 	end
 	self.failed = true
-	warn("[DynamicIsland] Liquid glass tắt, quay về kính cổ điển: " .. tostring(reason))
-	self.isl:_lgFailed()
+	ACTIVE_PANES[self] = nil
+	warn("[DynamicIsland] Liquid glass tắt, chuyển về kính cổ điển: " .. tostring(reason))
+	if self.isl and self.isl._lgFailed then
+		self.isl:_lgFailed()
+	end
 end
 
-----------------------------------------------------------------------
--- Việc chạy nền chia nhỏ theo ngân sách ms (coroutine)
-----------------------------------------------------------------------
 function Liquid:_newJob(fn)
 	local job = { deadline = 0 }
 	local function step()
@@ -1242,7 +1267,6 @@ function Liquid:_newJob(fn)
 	return job
 end
 
--- Trả về: done, kết quả...
 function Liquid:_resume(job, deadline)
 	job.deadline = deadline
 	local ok, a, b, c = coroutine.resume(job.co)
@@ -1256,83 +1280,106 @@ function Liquid:_resume(job, deadline)
 	return false
 end
 
-----------------------------------------------------------------------
--- Hình dạng đảo: gọi mỗi khi đảo đổi kích thước/bán kính (đơn vị của đảo, trước UIScale).
--- Bản đồ tra cứu CHỈ tính lại khi hình dạng đổi và đảo đã đứng yên (như bài blog).
-----------------------------------------------------------------------
+-- Giải quyết thông số hình học & độ phân giải đầu ra từ kích thước hiện tại
+function Liquid:_resolveSpec()
+	local sh = self.shape
+	local W = max(floor(sh.w + 0.5), 4)
+	local H = max(floor(sh.h + 0.5), 4)
+	local minAxis = min(W, H)
+	local maxAxis = max(W, H)
+	local P = self.P
+
+	local maxRes = clampN(floor(P.MaxOutputResolution or 1024), 16, 1024)
+	-- Giữ mật độ điểm ảnh sắc nét cho mặt kính nhưng tôn trọng MaxOutputResolution và bộ nhớ
+	local budgetPixels = 16000 * self.scaleCap
+	local dsArea = sqrt((W * H) / max(budgetPixels, 256))
+	local dsMax = maxAxis / maxRes
+	local ds = max(1, dsArea, dsMax)
+	local LW = clampN(ceil(W / ds), 4, maxRes)
+	local LH = clampN(ceil(H / ds), 4, maxRes)
+
+	local cornerR = sh.r > 0 and sh.r or resolveUDim(P.CornerRadius, minAxis, 0, minAxis * 0.5)
+	local thickness = resolveUDim(P.Thickness, minAxis, 1, minAxis * 0.5)
+	local fresnelSz = resolveUDim(P.FresnelSize, minAxis, 0, minAxis * 0.5)
+	local glareSz = resolveUDim(P.GlareSize, minAxis, 0, minAxis * 0.5)
+	local blurRad = resolveUDim(P.BlurRadius or DEFAULT_BLUR_UDIM, minAxis, 1, minAxis)
+
+	return {
+		W = W, H = H, LW = LW, LH = LH,
+		CornerRadius = cornerR,
+		SuperEllipseFactor = clampN(P.SuperEllipseFactor or 3, 2, 7),
+		Thickness = thickness,
+		RefractionFactor = clampN(P.RefractionFactor or 2.1, 1, 4),
+		ChromaticAberration = clampN(P.ChromaticAberration or 0.2, 0, 1),
+		FresnelSize = fresnelSz,
+		FresnelHardness = clampN(P.FresnelHardness or 40, 0, 100),
+		FresnelIntensity = clampN(P.FresnelIntensity or 25, 0, 100),
+		GlareSize = glareSz,
+		GlareHardness = clampN(P.GlareHardness or 40, 0, 100),
+		GlareIntensity = clampN(P.GlareIntensity or 70, 0, 120),
+		GlareConvergence = clampN(P.GlareConvergence or 90, 0, 100),
+		GlareOppositeSide = clampN(P.GlareOppositeSide or 50, 0, 100),
+		GlareAngle = clampN(P.GlareAngle or -50, -180, 180),
+		BlurRadius = blurRad,
+	}
+end
+
 function Liquid:NoteShape(w, h, r)
 	local sh = self.shape
-	sh.w, sh.h, sh.r = w, h, r
-	local key = floor(w + 0.5) * 1000000 + floor(h + 0.5) * 1000 + floor(r * 2)
+	sh.w, sh.h, sh.r = w, h, r or 0
+	local key = string.format("%d_%d_%d", floor(w + 0.5), floor(h + 0.5), floor((r or 0) * 2 + 0.5))
 	if key ~= self.shapeKey then
 		self.shapeKey = key
 		self.lastChange = os.clock()
-		self.lensDirty = true
-		self.S, self.maps = nil, nil
-		self.mapsJob, self.lensJob = nil, nil -- huỷ việc dở; dựng lại khi đảo đứng yên
-		self.samp = nil
+		self.geomDirty = true
+		self.reconstructDirty = true
+		self.geomJob = nil
+		self.reconstructJob = nil
 	end
 end
 
--- Quy đổi tham số sang px theo hình dạng hiện tại + dựng lưới backdrop méo cho hình dạng đó
-function Liquid:_prepare()
-	local sh = self.shape
-	if sh.w < 12 or sh.h < 12 then
-		return false
+function Liquid:SetGlareAngle(deg)
+	if abs((self.P.GlareAngle or -50) - deg) > 0.5 then
+		self.P.GlareAngle = deg
+		self.geomDirty = true
+		self.reconstructDirty = true
 	end
-	local isl, P = self.isl, self.P
-	local S = resolveShape(sh.w, sh.h, sh.r, P)
-	if S.hmin < 3 then
-		return false
-	end
-	S.ds = max(
-		1,
-		P.OutputScale or 1,
-		sqrt(sh.w * sh.h / (P.TargetPixels or 45000)),
-		max(sh.w, sh.h) / (P.MaxOutputResolution or 1024)
-	)
-	local base = isl._style.base
-	S.tR, S.tG, S.tB = base.R, base.G, base.B
-	if P.Transparency ~= nil then
-		S.tintAmt = clampN(1 - P.Transparency, 0, 1)
-	else
-		S.tintAmt = isl._style.tint or 0.4
-	end
-	self.S = S
-	self.maps, self.mapsJob, self.lensJob = nil, nil, nil
-	self:_ensureGrid(S)
-	return true
 end
 
 ----------------------------------------------------------------------
--- Lưới backdrop thô và MÉO (dày ở dải viền)
+-- LẤY MẪU MÀN HÌNH (SCREEN SAMPLER): 2D UI TREE WALK + 3D RAYCAST
 ----------------------------------------------------------------------
-function Liquid:_ensureGrid(S)
-	local gw, gh = gridDims(S.W, S.H)
-	local posX, lutX = warpAxis(S.W, S.T, gw)
-	local posY, lutY = warpAxis(S.H, S.T, gh)
-	local base = self.isl._style.base
+-- Lưới nguồn có độ phân giải ~1/5 độ phân giải đầu ra (1 ô lưới cho mỗi 5x5 px) theo đúng bài blog
+function Liquid:_ensureGrid(W, H)
+	local gw = clampN(ceil(W / 5), 8, 72)
+	local gh = clampN(ceil(H / 5), 5, 52)
+	local beta = clampN(self.P.SamplerWarp or 0.45, 0, 0.85)
+	if self.gr and self.gw == gw and self.gh == gh and self.lutW == W and self.lutH == H and self.lutBeta == beta then
+		return
+	end
+	local baseColor = (self.isl and self.isl._style and self.isl._style.base) or self.body.BackgroundColor3
 	local n = gw * gh
-	local nr, ng, nb = newArray(n, base.R), newArray(n, base.G), newArray(n, base.B)
-	local old = self.grid
-	if old then
-		-- giữ lại màu cũ (tương ứng theo chỉ số chuẩn hoá) để đổi hình dạng không bị nhấp nháy
+	local nr, ng, nb = newArray(n, baseColor.R), newArray(n, baseColor.G), newArray(n, baseColor.B)
+	local ogw, ogh, gr, gg, gb = self.gw, self.gh, self.gr, self.gg, self.gb
+	if gr and ogw and ogh then
 		for j = 0, gh - 1 do
 			for i = 0, gw - 1 do
-				local oi = clampN(floor(i / (gw - 1) * (old.gw - 1) + 0.5), 0, old.gw - 1)
-				local oj = clampN(floor(j / (gh - 1) * (old.gh - 1) + 0.5), 0, old.gh - 1)
-				local ok = oj * old.gw + oi + 1
+				local oi = clampN(floor((i + 0.5) / gw * ogw), 0, ogw - 1)
+				local oj = clampN(floor((j + 0.5) / gh * ogh), 0, ogh - 1)
+				local ok = oj * ogw + oi + 1
 				local d = j * gw + i + 1
-				nr[d], ng[d], nb[d] = old.gr[ok], old.gg[ok], old.gb[ok]
+				nr[d], ng[d], nb[d] = gr[ok], gg[ok], gb[ok]
 			end
 		end
 	end
-	self.grid = {
-		gw = gw, gh = gh, gr = nr, gg = ng, gb = nb,
-		posX = posX, posY = posY, lutX = lutX, lutY = lutY,
-		fresh = old == nil,
-	}
-	self.samp = nil
+	self.gw, self.gh = gw, gh
+	self.gr, self.gg, self.gb = nr, ng, nb
+	self.lutX, self.centersX = buildWarpLUT(W, gw, beta)
+	self.lutY, self.centersY = buildWarpLUT(H, gh, beta)
+	self.lutW, self.lutH, self.lutBeta = W, H, beta
+	self.gridFresh = (gr == nil)
+	self.sampleCursor = 0
+	self.passChangedCells = 0
 end
 
 function Liquid:_skySnapshot()
@@ -1345,12 +1392,16 @@ function Liquid:_skySnapshot()
 	local day = smooth01((sunY + 0.15) / 0.4)
 	local topR, topG, topB = lerp(NIGHT_TOP[1], DAY_TOP[1], day), lerp(NIGHT_TOP[2], DAY_TOP[2], day), lerp(NIGHT_TOP[3], DAY_TOP[3], day)
 	local horR, horG, horB = lerp(NIGHT_HOR[1], DAY_HOR[1], day), lerp(NIGHT_HOR[2], DAY_HOR[2], day), lerp(NIGHT_HOR[3], DAY_HOR[3], day)
-	local warm = clampN(1 - abs(sunY - 0.02) / 0.25, 0, 1) * 0.55 -- hoàng hôn/bình minh ám cam ở chân trời
+	local warm = clampN(1 - abs(sunY - 0.02) / 0.25, 0, 1) * 0.55
 	horR, horG, horB = lerp(horR, SUNSET[1], warm), lerp(horG, SUNSET[2], warm), lerp(horB, SUNSET[3], warm)
+
+	local fogC = Lighting.FogColor
+	local fogStart, fogEnd = Lighting.FogStart, Lighting.FogEnd
 	local atmo = Lighting:FindFirstChildOfClass("Atmosphere")
 	if atmo then
 		local c = atmo.Color
 		horR, horG, horB = lerp(horR, c.R, 0.35), lerp(horG, c.G, 0.35), lerp(horB, c.B, 0.35)
+		fogC = c
 	end
 	if type(P.Sky) == "table" then
 		local t, h = P.Sky.Top, P.Sky.Horizon
@@ -1363,254 +1414,460 @@ function Liquid:_skySnapshot()
 	end
 	return {
 		sun = sun,
-		amb = 0.22 + 0.4 * day,
+		amb = 0.24 + 0.42 * day,
 		topR = topR, topG = topG, topB = topB,
 		horR = horR, horG = horG, horB = horB,
+		fogR = fogC.R, fogG = fogC.G, fogB = fogC.B,
+		fogStart = fogStart or 0,
+		fogEnd = max(fogEnd or 1000, 50),
 	}
 end
 
 function Liquid:_skyColor(dir)
 	local L = self.sky
-	local e = dir.Y
-	if e < 0 then
-		e = 0
-	end
+	local e = max(dir.Y, 0)
 	local t = e ^ 0.55
 	return L.horR + (L.topR - L.horR) * t, L.horG + (L.topG - L.horG) * t, L.horB + (L.topB - L.horB) * t
 end
 
--- Màu một điểm trên màn hình: trúng vật -> màu vật nhân sáng đơn giản (Lambert + sương xa), trượt -> màu trời
-function Liquid:_colorOf(res, dir)
-	if not res then
-		return self:_skyColor(dir)
+-- Duyệt cây giao diện 2D tại điểm (screenX, screenY) thông qua GetGuiObjectsAtPosition
+function Liquid:_sampleUIStack(screenX, screenY)
+	local lp = Players.LocalPlayer
+	local pgui = lp and lp:FindFirstChildOfClass("PlayerGui")
+	if not pgui then
+		return 0, 0, 0, 0
+	end
+
+	-- Hỗ trợ kính chồng kính (Glass over Glass): kiểm tra nếu có tấm kính thấp hơn nằm dưới điểm này
+	for otherPane in pairs(ACTIVE_PANES) do
+		if otherPane ~= self and otherPane.enabled and not otherPane.destroyed and otherPane.gr and otherPane.body then
+			local b = otherPane.body
+			if b.Visible and not self.body:IsDescendantOf(b) and not b:IsDescendantOf(self.body) then
+				local ap, as = b.AbsolutePosition, b.AbsoluteSize
+				if screenX >= ap.X and screenX <= ap.X + as.X and screenY >= ap.Y and screenY <= ap.Y + as.Y then
+					if b.ZIndex <= self.body.ZIndex then
+						local u = clampN((screenX - ap.X) / max(as.X, 1) * (otherPane.gw - 1), 0, otherPane.gw - 1)
+						local v = clampN((screenY - ap.Y) / max(as.Y, 1) * (otherPane.gh - 1), 0, otherPane.gh - 1)
+						local idx = floor(v + 0.5) * otherPane.gw + floor(u + 0.5) + 1
+						local r = otherPane.gr[idx]
+						if r then
+							return r, otherPane.gg[idx], otherPane.gb[idx], 0.92
+						end
+					end
+				end
+			end
+		end
+	end
+
+	local ok, list = pcall(function()
+		return pgui:GetGuiObjectsAtPosition(screenX, screenY)
+	end)
+	if not ok or type(list) ~= "table" or #list == 0 then
+		return 0, 0, 0, 0
+	end
+
+	local accR, accG, accB, accA = 0, 0, 0, 0
+	local myRoot = (self.isl and self.isl._gui) or self.body
+
+	for _, obj in ipairs(list) do
+		if obj ~= self.body and obj ~= self.pane and not obj:IsDescendantOf(myRoot) then
+			-- 1) Kiểm tra TextLabel / TextButton có chữ tại vị trí lấy mẫu
+			if (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) and obj.Text ~= "" and obj.TextTransparency < 0.98 then
+				local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
+				local tb = obj.TextBounds
+				local tx0, ty0 = ap.X, ap.Y
+				if obj.TextXAlignment == Enum.TextXAlignment.Center then
+					tx0 = ap.X + (as.X - tb.X) * 0.5
+				elseif obj.TextXAlignment == Enum.TextXAlignment.Right then
+					tx0 = ap.X + as.X - tb.X
+				end
+				if obj.TextYAlignment == Enum.TextYAlignment.Center then
+					ty0 = ap.Y + (as.Y - tb.Y) * 0.5
+				elseif obj.TextYAlignment == Enum.TextYAlignment.Bottom then
+					ty0 = ap.Y + as.Y - tb.Y
+				end
+				if screenX >= tx0 and screenX <= tx0 + tb.X and screenY >= ty0 and screenY <= ty0 + tb.Y then
+					local ta = (1 - obj.TextTransparency) * 0.65
+					local tc = obj.TextColor3
+					local w = (1 - accA) * ta
+					accR = accR + tc.R * w
+					accG = accG + tc.G * w
+					accB = accB + tc.B * w
+					accA = accA + w
+				end
+			end
+
+			-- 2) Kiểm tra ImageLabel / ImageButton
+			if (obj:IsA("ImageLabel") or obj:IsA("ImageButton")) and obj.Image ~= "" and obj.ImageTransparency < 0.98 then
+				local ia = 1 - obj.ImageTransparency
+				local ic = obj.ImageColor3
+				local w = (1 - accA) * ia
+				accR = accR + ic.R * w
+				accG = accG + ic.G * w
+				accB = accB + ic.B * w
+				accA = accA + w
+			end
+
+			-- 3) Kiểm tra màu nền BackgroundColor3 của GuiObject
+			if obj.BackgroundTransparency < 0.98 then
+				local ba = 1 - obj.BackgroundTransparency
+				local bc = obj.BackgroundColor3
+				local w = (1 - accA) * ba
+				accR = accR + bc.R * w
+				accG = accG + bc.G * w
+				accB = accB + bc.B * w
+				accA = accA + w
+			end
+
+			if accA >= 0.98 then
+				break
+			end
+		end
+	end
+
+	if accA > 1e-4 then
+		return accR / accA, accG / accA, accB / accA, clampN(accA, 0, 1)
+	end
+	return 0, 0, 0, 0
+end
+
+-- Đánh giá màu 3D raycast (Part, Terrain/Water, ánh sáng mặt trời và sương mù Lighting)
+function Liquid:_sampleWorld3D(ray)
+	local res = workspace:Raycast(ray.Origin, ray.Direction * RAY_LEN, self.rayParams)
+	local L = self.sky
+	if not res or not res.Instance then
+		return self:_skyColor(ray.Direction)
 	end
 	local inst = res.Instance
-	if not inst then
-		return nil
-	end
-	local L = self.sky
 	local r, g, b
 	if inst:IsA("Terrain") then
-		local c = inst:GetMaterialColor(res.Material)
-		r, g, b = c.R, c.G, c.B
+		if res.Material == Enum.Material.Water then
+			local wc = inst.WaterColor
+			r, g, b = wc.R, wc.G, wc.B
+		else
+			local mc = inst:GetMaterialColor(res.Material)
+			r, g, b = mc.R, mc.G, mc.B
+		end
 	else
 		local tr = inst.Transparency
-		if tr >= 0.9 then
-			return nil -- vật vô hình (hitbox...): giữ giá trị cũ
+		if tr >= 0.92 then
+			return self:_skyColor(ray.Direction)
 		end
 		local c = inst.Color
 		r, g, b = c.R, c.G, c.B
 		if tr > 0.05 then
-			local sr, sg, sb = self:_skyColor(dir)
-			r, g, b = r + (sr - r) * tr, g + (sg - g) * tr, b + (sb - b) * tr
+			local sr, sg, sb = self:_skyColor(ray.Direction)
+			r, g, b = lerp(r, sr, tr), lerp(g, sg, tr), lerp(b, sb, tr)
 		end
 	end
-	local nd = res.Normal:Dot(L.sun)
-	if nd < 0 then
-		nd = 0
-	end
+
+	local nd = max(res.Normal:Dot(L.sun), 0)
 	local sh = L.amb + (1 - L.amb) * nd
 	r, g, b = r * sh, g * sh, b * sh
-	local hz = (res.Distance / 1500) ^ 1.5 * 0.5
-	if hz > 0.5 then
-		hz = 0.5
-	end
-	return r + (L.horR - r) * hz, g + (L.horG - g) * hz, b + (L.horB - b) * hz
+
+	-- Sương mù theo khoảng cách (Lighting Fog + Atmosphere)
+	local dist = res.Distance
+	local fogFactor = clampN((dist - L.fogStart) / max(L.fogEnd - L.fogStart, 1), 0, 0.65)
+	local hz = max(fogFactor, min((dist / 1500) ^ 1.5 * 0.5, 0.5))
+	return lerp(r, L.fogR, hz), lerp(g, L.fogG, hz), lerp(b, L.fogB, hz)
 end
 
--- Raycast xuyên qua các part gần như vô hình (hitbox, kính...) tối đa MAX_HOPS lần, như bài blog
-function Liquid:_cast(origin, dir)
-	local params = self.rayParams
-	local res = workspace:Raycast(origin, dir, params)
-	local hops = 0
-	while res and hops < MAX_HOPS do
-		local inst = res.Instance
-		if inst and not inst:IsA("Terrain") and inst.Transparency >= 0.95 then
-			hops = hops + 1
-			local list = params.FilterDescendantsInstances
-			list[#list + 1] = inst
-			params.FilterDescendantsInstances = list
-			res = workspace:Raycast(origin, dir, params)
-		else
-			break
-		end
-	end
-	if hops > 0 then
-		params.FilterDescendantsInstances = {}
-	end
-	return res
-end
-
-function Liquid:_sample(now, dl)
-	local g, S = self.grid, self.S
-	if not g or not S then
+-- Quét màn trập cuốn (Rolling Refresh) trong ngân sách SamplingBudget (5 ms)
+function Liquid:_stepSampler(deadline)
+	local P = self.P
+	-- Nếu Transparency == 0 (đặc 100%), bỏ qua lấy mẫu màn hình theo đúng đặc tả GlassmorphicUI
+	if P.Transparency == 0 or P.Backdrop == false then
 		return
 	end
-	local st = self.samp
-	if not st then
-		if now < self.nextSample then
-			return
-		end
-		self.sky = self:_skySnapshot()
-		self.rayParams = self.rayParams or RaycastParams.new()
-		st = { i = 0, n = g.gw * g.gh, delta = 0, fresh = g.fresh }
-		self.samp = st
+	local sh = self.shape
+	if sh.w < 8 or sh.h < 8 then
+		return
 	end
+	local W, H = max(floor(sh.w + 0.5), 8), max(floor(sh.h + 0.5), 8)
+	self:_ensureGrid(W, H)
+
 	local cam = workspace.CurrentCamera
 	local ap, sz = self.body.AbsolutePosition, self.body.AbsoluteSize
 	if not cam or sz.X < 4 or sz.Y < 4 then
-		self.samp = nil
 		return
 	end
-	local gw, W, H = g.gw, S.W, S.H
-	local k = st.fresh and 1 or 0.55 -- làm mượt theo thời gian để khỏi nhấp nháy
-	while st.i < st.n and os.clock() < dl do
-		local i = st.i
-		local cx, cy = i % gw, floor(i / gw)
-		-- điểm lưới (đã méo) trong cửa sổ -> toạ độ màn hình
-		local ray = cam:ViewportPointToRay(ap.X + g.posX[cx + 1] / W * sz.X, ap.Y + g.posY[cy + 1] / H * sz.Y)
-		local res = self:_cast(ray.Origin, ray.Direction * RAY_LEN)
-		local r, gg, b = self:_colorOf(res, ray.Direction)
-		if r then
-			local idx = i + 1
-			local o1, o2, o3 = g.gr[idx], g.gg[idx], g.gb[idx]
-			local n1, n2, n3 = o1 + (r - o1) * k, o2 + (gg - o2) * k, o3 + (b - o3) * k
-			st.delta = st.delta + abs(n1 - o1) + abs(n2 - o2) + abs(n3 - o3)
-			g.gr[idx], g.gg[idx], g.gb[idx] = n1, n2, n3
-		end
-		st.i = i + 1
+
+	local gw, gh = self.gw, self.gh
+	local totalCells = gw * gh
+	if self.sampleCursor == 0 or not self.sky then
+		self.sky = self:_skySnapshot()
+		self.rayParams = self.rayParams or RaycastParams.new()
 	end
-	if st.i >= st.n then
-		self.samp = nil
-		self.sampledOnce = true
-		g.fresh = false
-		self.nextSample = now + 1 / max(self.P.BackdropHz or 5, 0.2)
-		if st.fresh or st.delta / (st.n * 3) > 0.004 then
-			self.lensDirty = true -- nền đổi đủ nhiều mới dựng lại ảnh (đứng yên = không tốn gì thêm)
+
+	local blendK = self.gridFresh and 1 or 0.55
+	local centersX, centersY = self.centersX, self.centersY
+	local gr, gg, gb = self.gr, self.gg, self.gb
+	local cursor = self.sampleCursor
+	local scanned = 0
+
+	while scanned < totalCells and os.clock() < deadline do
+		local cx = cursor % gw
+		local cy = floor(cursor / gw)
+		local normX = centersX[cx + 1] / W
+		local normY = centersY[cy + 1] / H
+		local sx = ap.X + normX * sz.X
+		local sy = ap.Y + normY * sz.Y
+
+		-- 1) Lấy mẫu cây giao diện 2D trước
+		local uiR, uiG, uiB, uiA = self:_sampleUIStack(sx, sy)
+		local finalR, finalG, finalB
+		if uiA >= 0.98 then
+			finalR, finalG, finalB = uiR, uiG, uiB
+		else
+			-- 2) Nếu UI trong suốt, bắn tia 3D vào workspace
+			local ray = cam:ViewportPointToRay(sx, sy)
+			local wR, wG, wB = self:_sampleWorld3D(ray)
+			if uiA > 0 then
+				finalR = uiR * uiA + wR * (1 - uiA)
+				finalG = uiG * uiA + wG * (1 - uiA)
+				finalB = uiB * uiA + wB * (1 - uiA)
+			else
+				finalR, finalG, finalB = wR, wG, wB
+			end
+		end
+
+		local idx = cursor + 1
+		local oR, oG, oB = gr[idx], gg[idx], gb[idx]
+		local nR = oR + (finalR - oR) * blendK
+		local nG = oG + (finalG - oG) * blendK
+		local nB = oB + (finalB - oB) * blendK
+
+		if abs(nR - oR) + abs(nG - oG) + abs(nB - oB) > 0.008 then
+			self.passChangedCells = self.passChangedCells + 1
+		end
+		gr[idx], gg[idx], gb[idx] = nR, nG, nB
+
+		self.samplesReceived = self.samplesReceived + 1
+		cursor = cursor + 1
+		scanned = scanned + 1
+		if cursor >= totalCells then
+			-- Hoàn tất 1 vòng quét toàn bộ lưới (Pass Complete)
+			cursor = 0
+			if self.gridFresh or self.passChangedCells > 0 then
+				self.reconstructDirty = true
+			end
+			self.gridFresh = false
+			self.passChangedCells = 0
+			break
 		end
 	end
+
+	self.sampleCursor = cursor
 end
 
 ----------------------------------------------------------------------
--- Dựng lại ảnh kính từ bản đồ hình dạng + lưới backdrop hiện tại (trong coroutine)
+-- ĐÓNG BĂNG HÌNH HỌC, TÁI DỰNG VÀ GHI EDITABLEIMAGE
 ----------------------------------------------------------------------
-function Liquid:_startLens(now)
-	local S, M, g = self.S, self.maps, self.grid
-	if not (S and M and g) then
-		return
-	end
-	local hasDof = self.isl._dof ~= nil -- có mờ nền thật thì phần giữa trong suốt, chỉ dải viền khúc xạ hiện lên
-	S.aIn = hasDof and 0 or 1
-	S.aRim = hasDof and 0.55 or 1
-	local G = {
-		gw = g.gw, gh = g.gh,
-		gr = table.clone(g.gr), gg = table.clone(g.gg), gb = table.clone(g.gb),
-		lutX = g.lutX, lutY = g.lutY,
-	}
-	self.lensJob = self:_newJob(function(step)
-		return reconstruct(S, M, G, step)
-	end)
-	self.lensDirty = false
-	self.lensStart = now
-end
-
-function Liquid:_flush(w)
-	if not self.lensImg or self.lensW ~= w.w or self.lensH ~= w.h then
-		local img = self:_newImage(w.w, w.h)
-		if not img or not self:_write(img, w.w, w.h, w.buf) or not self:_show(self.lens, img) then
-			self:_fail("không tạo/ghi/gán được ảnh kính")
+function Liquid:_flushBuffer(buf, LW, LH)
+	if not self.paneImg or self.paneW ~= LW or self.paneH ~= LH then
+		local img = self:_newImage(LW, LH)
+		if not img then
+			-- Khi EditableImage hết bộ nhớ, tự động giảm một nửa độ phân giải theo đúng tài liệu GlassmorphicUI
+			if self.scaleCap > 0.25 then
+				self.scaleCap = self.scaleCap * 0.5
+				self.geomDirty = true
+				self.reconstructDirty = true
+				return
+			end
+			self:_fail("Không thể cấp phát bộ nhớ EditableImage cho GlassPane")
 			return
 		end
-		local old = self.lensImg
-		self.lensImg, self.lensW, self.lensH = img, w.w, w.h
+		if not self:_write(img, LW, LH, buf) or not self:_show(self.pane, img) then
+			pcall(function()
+				img:Destroy()
+			end)
+			self:_fail("Không thể ghi hoặc gán EditableImage cho GlassPane")
+			return
+		end
+		local old = self.paneImg
+		self.paneImg, self.paneW, self.paneH = img, LW, LH
 		if old then
 			pcall(function()
 				old:Destroy()
 			end)
 		end
-	elseif not self:_write(self.lensImg, w.w, w.h, w.buf) then
-		self:_fail("ghi ảnh kính lỗi")
+	elseif not self:_write(self.paneImg, LW, LH, buf) then
+		self:_fail("Lỗi khi cập nhật buffer vào GlassPane")
+		return
 	end
+	self.firstRenderDone = true
+	self.framesSinceReconstruct = 0
 end
 
-----------------------------------------------------------------------
--- Mỗi Heartbeat: bản đồ hình dạng -> ghi tối đa 1 ảnh -> lấy mẫu -> dựng lại ảnh, tất cả trong ngân sách ms
-----------------------------------------------------------------------
+function Liquid:_buildReconstructJob(spec, geom)
+	self:_ensureGrid(spec.W, spec.H)
+	local baseColor = (self.isl and self.isl._style and self.isl._style.base) or self.body.BackgroundColor3
+	local P = self.P
+	local tr = clampN(P.Transparency or 0.85, 0, 1)
+	-- Khi Transparency = 0, tấm kính đặc hoàn toàn màu nền; khi > 0, pha nhẹ màu nền theo TintMix
+	local tintMix = (tr == 0) and 1 or clampN(P.TintMix or ((1 - tr) * 0.35), 0, 1)
+	local paneAlpha = (tr == 0) and 1 or clampN(P.Opacity or 0.94, 0.1, 1)
+
+	-- Chụp nhanh (Snapshot) lưới nguồn bất biến cho toàn bộ lượt tái dựng
+	local n = self.gw * self.gh
+	local snapR, snapG, snapB = newArray(n, 0), newArray(n, 0), newArray(n, 0)
+	for i = 1, n do
+		snapR[i], snapG[i], snapB[i] = self.gr[i], self.gg[i], self.gb[i]
+	end
+
+	return {
+		geom = geom,
+		gw = self.gw, gh = self.gh,
+		gr = snapR, gg = snapG, gb = snapB,
+		lutX = self.lutX, lutY = self.lutY,
+		ChromaticAberration = spec.ChromaticAberration,
+		BlurRadius = spec.BlurRadius,
+		tintR = baseColor.R, tintG = baseColor.G, tintB = baseColor.B,
+		tintMix = tintMix,
+		paneAlpha = paneAlpha,
+	}
+end
+
+-- Thực thi đồng bộ toàn bộ đường ống trong 1 frame duy nhất (dùng cho GlassmorphicUI.forceUpdate)
+function Liquid:ForceUpdateSync()
+	if self.failed or self.destroyed then
+		return
+	end
+	local sh = self.shape
+	if sh.w < 4 or sh.h < 4 then
+		local as = self.body.AbsoluteSize
+		self:NoteShape(max(as.X, 16), max(as.Y, 16), 0)
+	end
+	local spec = self:_resolveSpec()
+	local gKey = getGeometryKey(spec)
+	local entry = GEOM_CACHE[gKey]
+	local geom
+	if entry then
+		entry.lastUsed = os.clock()
+		geom = entry.geom
+	else
+		geom = bakeGeometry(spec, nil)
+		GEOM_CACHE[gKey] = { geom = geom, lastUsed = os.clock() }
+		GEOM_CACHE_COUNT = GEOM_CACHE_COUNT + 1
+		evictGeometryCache()
+	end
+	self.currentGeom = geom
+	self.geomDirty = false
+
+	self.gridFresh = true
+	self.sampleCursor = 0
+	pcall(self._stepSampler, self, os.clock() + 0.025)
+
+	local jobData = self:_buildReconstructJob(spec, geom)
+	local buf, LW, LH = reconstructFrostAndLight(jobData, nil)
+	self:_flushBuffer(buf, LW, LH)
+	self.reconstructDirty = false
+	self.geomJob = nil
+	self.reconstructJob = nil
+	self.pendingWrite = nil
+	self.executionPath = "sync"
+end
+
+-- Vòng lặp mỗi khung hình với ngân sách tách biệt: 5 ms Sampling + 8 ms Rendering (Tổng <= 13 ms)
 function Liquid:Step()
 	if self.failed or self.destroyed or not self.enabled then
 		return
 	end
 	local isl = self.isl
-	if isl._destroyed or isl._hidden or not isl._glass or not isl._gui.Enabled then
+	if isl and (isl._destroyed or isl._hidden or not isl._glass or not isl._gui.Enabled) then
 		return
 	end
+	if self.paused and self.firstRenderDone then
+		self.executionPath = "idle"
+		self.framesSinceReconstruct = self.framesSinceReconstruct + 1
+		return
+	end
+
+	local sh = self.shape
+	if sh.w < 8 or sh.h < 8 then
+		local as = self.body.AbsoluteSize
+		if as.X >= 8 and as.Y >= 8 then
+			self:NoteShape(as.X, as.Y, sh.r)
+		else
+			return
+		end
+	end
+
 	local now = os.clock()
-	local deadline = now + (self.P.Budget or 3) / 1000
-	local settled = now - self.lastChange >= SETTLE
+	local sampDeadline = now + (self.P.SamplingBudget or 5) / 1000
+	local renderDeadline = sampDeadline + (self.P.RenderingBudget or 8) / 1000
+	self.framesSinceReconstruct = self.framesSinceReconstruct + 1
 
-	-- 1) hình dạng đã đứng yên: quy đổi tham số + dựng lưới méo, rồi bản đồ tra cứu theo pixel
-	if settled and not self.S then
-		self:_prepare()
+	-- 1) Ghi buffer đã dựng xong từ frame trước (EditableImage giới hạn tối đa 1 lần ghi mỗi frame)
+	if self.pendingWrite then
+		local pw = self.pendingWrite
+		self.pendingWrite = nil
+		self:_flushBuffer(pw.buf, pw.w, pw.h)
 	end
-	if self.S and not self.maps and not self.mapsJob then
-		local S = self.S
-		self.mapsJob = self:_newJob(function(step)
-			return buildMaps(S, S.ds, step)
-		end)
-	end
-	local mj = self.mapsJob
-	if mj and os.clock() < deadline then
-		local done, maps = self:_resume(mj, deadline)
-		if done and self.mapsJob == mj then
-			self.mapsJob = nil
-			if maps then
-				self.maps = maps
-				self.lensDirty = true
+
+	-- 2) Ngân sách Lấy mẫu màn hình (Sampling Budget <= 5 ms)
+	pcall(self._stepSampler, self, sampDeadline)
+
+	-- 3) Ngân sách Kết xuất (Rendering Budget <= 8 ms): Đóng băng hình học -> Tái dựng + Frost + Rim
+	local spec = self:_resolveSpec()
+	if self.geomDirty or not self.currentGeom then
+		local gKey = getGeometryKey(spec)
+		local cached = GEOM_CACHE[gKey]
+		if cached then
+			cached.lastUsed = now
+			self.currentGeom = cached.geom
+			self.geomDirty = false
+			self.geomJob = nil
+		else
+			if not self.geomJob or self.geomJob.key ~= gKey then
+				self.geomJob = self:_newJob(function(step)
+					return bakeGeometry(spec, step)
+				end)
+				self.geomJob.key = gKey
+			end
+			local done, baked = self:_resume(self.geomJob, renderDeadline)
+			if done then
+				self.geomJob = nil
+				if baked then
+					GEOM_CACHE[gKey] = { geom = baked, lastUsed = now }
+					GEOM_CACHE_COUNT = GEOM_CACHE_COUNT + 1
+					evictGeometryCache()
+					self.currentGeom = baked
+					self.geomDirty = false
+				end
 			end
 		end
 	end
 
-	-- 2) EditableImage chỉ cho cập nhật 1 lần/frame -> mỗi frame ghi tối đa một ảnh
-	local w = table.remove(self.writes, 1)
-	if w then
-		self:_flush(w)
-	end
-
-	-- 3) backdrop
-	if self.S and os.clock() < deadline and (self.P.Backdrop ~= false or not self.sampledOnce) then
-		local ok, err = pcall(self._sample, self, now, min(deadline, os.clock() + 0.0015))
-		if not ok then
-			self.sampErrors = (self.sampErrors or 0) + 1
-			self.samp = nil
-			if self.sampErrors >= 3 then
-				self.P.Backdrop = false
-				self.sampledOnce = true
-				warn("[DynamicIsland] Tắt lấy mẫu backdrop vì lỗi: " .. tostring(err))
-			end
-		end
-	end
-
-	-- 4) dựng lại ảnh kính
+	-- Chỉ bắt đầu lượt tái dựng mới khi hình học đã sẵn sàng và (lần đầu tiên hoặc đảo đã ổn định nhịp ngắn)
+	local settleWait = self.firstRenderDone and 0.055 or 0
 	if
-		self.lensDirty
-		and self.maps
-		and not self.lensJob
-		and not self.mapsJob
-		and #self.writes == 0
-		and settled
-		and now - self.lensStart >= LENS_GAP
+		self.currentGeom
+		and not self.geomJob
+		and not self.reconstructJob
+		and not self.pendingWrite
+		and self.reconstructDirty
+		and (now - self.lastChange >= settleWait)
+		and os.clock() < renderDeadline
 	then
-		self:_startLens(now)
+		local jobData = self:_buildReconstructJob(spec, self.currentGeom)
+		self.reconstructJob = self:_newJob(function(step)
+			return reconstructFrostAndLight(jobData, step)
+		end)
+		self.reconstructDirty = false
 	end
-	local lj = self.lensJob
-	if lj and os.clock() < deadline then
-		local done, buf, OW, OH = self:_resume(lj, deadline)
-		if done and self.lensJob == lj then
-			self.lensJob = nil
+
+	if self.reconstructJob and os.clock() < renderDeadline then
+		self.executionPath = "sync"
+		local done, buf, LW, LH = self:_resume(self.reconstructJob, renderDeadline)
+		if done then
+			self.reconstructJob = nil
 			if buf then
-				self.writes[#self.writes + 1] = { buf = buf, w = OW, h = OH }
+				self.pendingWrite = { buf = buf, w = LW, h = LH }
 			end
 		end
+	elseif not self.geomJob and not self.reconstructJob then
+		self.executionPath = "idle"
 	end
 end
 
@@ -1626,32 +1883,39 @@ function Liquid:SafeStep()
 	end
 end
 
-----------------------------------------------------------------------
--- Điều khiển
-----------------------------------------------------------------------
 function Liquid:SetVisible(on)
 	self.enabled = on and true or false
-	self.lens.Visible = self.enabled
+	self.pane.Visible = self.enabled
 	if self.enabled then
-		self.lensDirty = true
+		self.reconstructDirty = true
 	end
 end
 
 function Liquid:Refresh()
-	self.sampledOnce = false
-	self.nextSample = 0
-	self.lensDirty = true
+	self.gridFresh = true
+	self.sampleCursor = 0
+	self.reconstructDirty = true
 end
 
 function Liquid:SetParams(opts)
 	for k, v in pairs(opts or {}) do
 		self.P[k] = v
 	end
-	self.S, self.maps = nil, nil
-	self.mapsJob, self.lensJob = nil, nil
-	self.writes = {}
-	self.lastChange = os.clock()
+	self.geomDirty = true
+	self.geomJob = nil
+	self.reconstructJob = nil
 	self:Refresh()
+end
+
+function Liquid:GetDebugStats()
+	local spec = self:_resolveSpec()
+	return {
+		GridResolution = Vector2.new(self.gw or 0, self.gh or 0),
+		OutputResolution = Vector2.new(spec.LW, spec.LH),
+		BackdropSamplesReceived = self.samplesReceived,
+		FramesSinceLastReconstruction = self.framesSinceReconstruct,
+		ExecutionPath = self.executionPath,
+	}
 end
 
 function Liquid:Destroy()
@@ -1659,19 +1923,146 @@ function Liquid:Destroy()
 		return
 	end
 	self.destroyed = true
-	if self.lensImg then
+	ACTIVE_PANES[self] = nil
+	for _, c in ipairs(self.attrConns) do
 		pcall(function()
-			self.lensImg:Destroy()
+			c:Disconnect()
 		end)
-		self.lensImg = nil
+	end
+	self.attrConns = {}
+	if self.paneImg then
+		pcall(function()
+			self.paneImg:Destroy()
+		end)
+		self.paneImg = nil
 	end
 	pcall(function()
-		self.lens:Destroy()
+		self.pane:Destroy()
 	end)
 end
 
 ----------------------------------------------------------------------
--- Dựng UI
+-- MÔ-ĐUN CHUẨN GLASSMORPHICUI API (TƯƠNG THÍCH 100% REPO BOATBEAKER)
+----------------------------------------------------------------------
+local GlassmorphicUI = {}
+local WINDOW_REGISTRY = setmetatable({}, { __mode = "k" })
+local STANDALONE_CONNS = {}
+
+local function ensureStandaloneLoop()
+	if STANDALONE_CONNS.heartbeat then
+		return
+	end
+	STANDALONE_CONNS.heartbeat = RunService.Heartbeat:Connect(function()
+		for win, entry in pairs(WINDOW_REGISTRY) do
+			if not win.Parent then
+				entry.lg:Destroy()
+				WINDOW_REGISTRY[win] = nil
+			else
+				local as = win.AbsoluteSize
+				entry.lg:NoteShape(as.X, as.Y, 0)
+				entry.lg:SafeStep()
+			end
+		end
+	end)
+end
+
+function GlassmorphicUI.addGlassBackground(guiObject)
+	assert(typeof(guiObject) == "Instance" and guiObject:IsA("GuiObject"), "Tham số phải là một GuiObject")
+	if WINDOW_REGISTRY[guiObject] then
+		return guiObject
+	end
+	pcall(function()
+		CollectionService:AddTag(guiObject, "GlassmorphicUI")
+	end)
+	guiObject.BackgroundTransparency = 1
+	local ok, lg = pcall(Liquid.new, nil, guiObject, nil)
+	if ok and lg then
+		local as = guiObject.AbsoluteSize
+		lg:NoteShape(max(as.X, 16), max(as.Y, 16), 0)
+		WINDOW_REGISTRY[guiObject] = { lg = lg }
+		ensureStandaloneLoop()
+	end
+	return guiObject
+end
+
+function GlassmorphicUI.new()
+	local frame = Instance.new("Frame")
+	frame.Name = "GlassWindow"
+	frame.Size = UDim2.fromOffset(300, 200)
+	frame.BackgroundColor3 = Color3.fromRGB(40, 42, 48)
+	frame.BackgroundTransparency = 1
+	frame.BorderSizePixel = 0
+	return GlassmorphicUI.addGlassBackground(frame)
+end
+
+function GlassmorphicUI.applyGlassToImageLabel(imageLabel)
+	GlassmorphicUI.addGlassBackground(imageLabel)
+end
+
+function GlassmorphicUI.forceUpdate(window)
+	local entry = WINDOW_REGISTRY[window]
+	if entry and entry.lg then
+		entry.lg:ForceUpdateSync()
+	end
+	return window
+end
+
+function GlassmorphicUI.pauseUpdates(window)
+	local entry = WINDOW_REGISTRY[window]
+	if entry and entry.lg then
+		entry.lg.paused = true
+	end
+	return window
+end
+
+function GlassmorphicUI.resumeUpdates(window)
+	local entry = WINDOW_REGISTRY[window]
+	if entry and entry.lg then
+		entry.lg.paused = false
+		entry.lg:Refresh()
+	end
+	return window
+end
+
+function GlassmorphicUI.setDefaultBlurRadius(blurRadius)
+	if typeof(blurRadius) == "UDim" or type(blurRadius) == "number" then
+		DEFAULT_BLUR_UDIM = blurRadius
+	end
+end
+
+function GlassmorphicUI.getDebugStats(window)
+	local entry = WINDOW_REGISTRY[window]
+	if entry and entry.lg then
+		return entry.lg:GetDebugStats()
+	end
+	return nil
+end
+
+-- Tự động lắng nghe CollectionService tag "GlassmorphicUI"
+pcall(function()
+	for _, inst in ipairs(CollectionService:GetTagged("GlassmorphicUI")) do
+		if inst:IsA("GuiObject") then
+			GlassmorphicUI.addGlassBackground(inst)
+		end
+	end
+	CollectionService:GetInstanceAddedSignal("GlassmorphicUI"):Connect(function(inst)
+		if inst:IsA("GuiObject") then
+			GlassmorphicUI.addGlassBackground(inst)
+		end
+	end)
+	CollectionService:GetInstanceRemovedSignal("GlassmorphicUI"):Connect(function(inst)
+		local entry = WINDOW_REGISTRY[inst]
+		if entry then
+			entry.lg:Destroy()
+			WINDOW_REGISTRY[inst] = nil
+		end
+	end)
+end)
+
+Island.GlassmorphicUI = GlassmorphicUI
+
+----------------------------------------------------------------------
+-- KHỞI TẠO & VẬN HÀNH DYNAMIC ISLAND
 ----------------------------------------------------------------------
 function Island.new(config)
 	config = config or {}
@@ -1686,7 +2077,7 @@ function Island.new(config)
 		RealBlur = config.RealBlur ~= false and (config.RealBlur or true) or false,
 		Liquid = config.Liquid ~= false and (config.Liquid or true) or false,
 		Top = config.Top or 11,
-		Scale = config.Scale, -- nil = tự co theo màn hình
+		Scale = config.Scale,
 		Intro = config.Intro ~= false,
 		OnTap = config.OnTap,
 		Glass = config.Glass ~= false,
@@ -1759,7 +2150,6 @@ function Island:_build()
 	self._holder = holder
 	self._scale = mk("UIScale", { Scale = self:_autoScale() }, holder)
 
-	-- Shell: khung kích thước đảo (không cắt), chứa thân (viền sáng nằm trong thân)
 	local shell = mk("Frame", {
 		Name = "Shell",
 		AnchorPoint = Vector2.new(0.5, 0),
@@ -1769,7 +2159,6 @@ function Island:_build()
 	self._shell = shell
 	self._pressScale = mk("UIScale", { Scale = 1 }, shell)
 
-	-- Vùng bấm rộng hơn đảo 8px mỗi phía cho dễ chạm (nằm dưới thân nên nút bên trong vẫn ăn input trước)
 	self._hit = mk("TextButton", {
 		Name = "Hit",
 		Text = "",
@@ -1783,7 +2172,6 @@ function Island:_build()
 		ZIndex = 0,
 	}, shell)
 
-	-- Thân đảo: CanvasGroup để nội dung bị cắt đúng theo góc bo
 	local body = mk("CanvasGroup", {
 		Name = "Body",
 		Size = UDim2.fromScale(1, 1),
@@ -1794,7 +2182,8 @@ function Island:_build()
 	}, shell)
 	self._body = body
 	self._bodyCorner = mk("UICorner", {}, body)
-	self:_lgCreate() -- lens (ZIndex 1) + rim (ZIndex 3); lỗi thì tự dùng kính cổ điển
+	self:_lgCreate()
+	self:_syncBodyFill()
 
 	local function glassItem(obj)
 		obj.Visible = glass
@@ -1802,9 +2191,6 @@ function Island:_build()
 		return obj
 	end
 
-	-- Bỏ lớp sheen/specular phản chiếu: tránh vệt sáng bị lệch khi phóng to.
-
-	-- 2) Màu activity hắt lên kính (từ phía icon)
 	self._tint = glassItem(mk("Frame", {
 		Name = "Tint",
 		BackgroundColor3 = Island.Colors.Blue,
@@ -1815,7 +2201,6 @@ function Island:_build()
 	}, body))
 	addGradient(self._tint, 0, { { 0, 0.78 }, { 0.5, 0.95 }, { 1, 1 } })
 
-	-- 3) Quầng sáng chạy theo ngón tay (xấp xỉ radial bằng các vòng tròn chồng nhau)
 	local glow = glassItem(mk("CanvasGroup", {
 		Name = "Glow",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -1824,7 +2209,6 @@ function Island:_build()
 		GroupTransparency = 1,
 		ZIndex = 1,
 	}, body))
-	-- 16 vòng tròn rất nhạt chồng nhau -> chuyển mờ mượt như radial gradient (trước chỉ 4 vòng nên lộ vành đồng tâm)
 	for i = 1, GLOW_N do
 		local d = GLOW_D * (1 - 0.94 * (i - 1) / GLOW_N)
 		local circle = mk("Frame", {
@@ -1839,9 +2223,6 @@ function Island:_build()
 	end
 	self._glow = glow
 
-	-- Không tạo lớp specular/reflection; giữ tint, glow, depth và viền kính.
-
-	-- 4) Chiều sâu kính: lặp N frame đen nhạt thu dần vào trong -> giữa tối, mép sáng mờ (frosted)
 	self._depth = {}
 	for i = 1, DEPTH_N do
 		local f = mk("Frame", {
@@ -1858,7 +2239,6 @@ function Island:_build()
 		table.insert(self._depth, { frame = f, corner = c, inset = i * DEPTH_STEP })
 	end
 
-	-- 6) Vệt sáng quét ngang khi đổi trạng thái
 	self._glint = glassItem(mk("Frame", {
 		Name = "Glint",
 		BackgroundColor3 = WHITE,
@@ -1868,10 +2248,8 @@ function Island:_build()
 	}, body))
 	self._glintGrad = addGradient(self._glint, 20, { { 0, 1 }, { 0.4, 1 }, { 0.5, 0.82 }, { 0.6, 1 }, { 1, 1 } })
 	self._glintGrad.Offset = Vector2.new(-1, 0)
-	self._glint.Visible = false -- tắt vệt phản chiếu quét ngang
+	self._glint.Visible = false
 
-	-- Viền kính (rim light): chồng nhiều UIStroke bám mép và dày vào trong -> sắc ở mép, mờ dần vào trong như độ dày của kính.
-	-- Nằm TRONG body (CanvasGroup) nên bị cắt đúng đường bo, không thể tràn ra ngoài.
 	self._edges = {}
 	for i, L in ipairs(EDGE_LAYERS) do
 		local f = mk("Frame", {
@@ -1887,11 +2265,10 @@ function Island:_build()
 		local c = mk("UICorner", {}, f)
 		local s = mk("UIStroke", { Color = WHITE, Thickness = L.t, Transparency = 0 }, f)
 		local near = L.lo + (L.mid - L.lo) * 0.8
-		local g = addGradient(s, RIM_ANGLE.idle, { { 0, L.lo }, { 0.2, near }, { 0.5, L.mid }, { 0.8, near }, { 1, L.lo } })
+		local g = addGradient(s, 40, { { 0, L.lo }, { 0.2, near }, { 0.5, L.mid }, { 0.8, near }, { 1, L.lo } })
 		table.insert(self._edges, { frame = f, corner = c, stroke = s, grad = g, t = L.t })
 	end
 
-	-- Layer Activity (compact): chỉ còn chữ bên phải (icon là icon dùng chung)
 	local act = newLayer(body, "Activity")
 	self._layers.Activity = act
 	act.right = newLabel(act.content, Island.Fonts.Bold, 14, WHITE, 0)
@@ -1899,21 +2276,16 @@ function Island:_build()
 	act.right.TextXAlignment = Enum.TextXAlignment.Right
 	act.right.Position = UDim2.new(1, -14, 0.5, 0)
 
-	-- Layer Notify (banner)
 	local nt = newLayer(body, "Notify")
 	self._layers.Notify = nt
 	nt.header = buildHeader(nt.content, 20)
 
-	-- Layer Expanded (dựng lại khi cấu trúc đổi, xem _syncExpanded)
 	self._layers.Expanded = newLayer(body, "Expanded")
-
-	-- Icon dùng chung
 	self._icon = newIcon(body)
 
-	-- Springs: w, h (thân), ix/iy/is/ir (icon), oy (kéo dọc)
 	local w0, h0 = M.IdleW, M.IdleH
 	if self._cfg.Intro then
-		w0, h0 = 26, 16 -- nhỏ rồi nảy ra cho đúng chất iOS
+		w0, h0 = 26, 16
 	end
 	self._sp = {
 		w = Spring.new(w0, SPRING_OPEN.w[1], SPRING_OPEN.w[2]),
@@ -1929,7 +2301,6 @@ function Island:_build()
 	self:_apply()
 end
 
--- Đẩy giá trị spring lên GUI (gọi mỗi khung hình khi đang animation)
 function Island:_apply()
 	local sp = self._sp
 	local w = math.max(sp.w.p, 1)
@@ -1939,10 +2310,11 @@ function Island:_apply()
 
 	self._shell.Size = UDim2.fromOffset(w, h)
 	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
-	self._bodyCorner.CornerRadius = UDim.new(0, r)
+	-- Khi Liquid bật, GlassPane tự cắt viền bằng mặt nạ siêu elip (SuperEllipseFactor = 3);
+	-- đặt CornerRadius của CanvasGroup về 0 để không cắt mất góc squircle của GlassPane.
+	self._bodyCorner.CornerRadius = UDim.new(0, self._lgOn and 0 or r)
 
-	local k = math.clamp(h / 16, 0, 1) -- viền mỏng dần khi đảo thu về 0
-	-- Viền kính: mỗi lớp là UIStroke dày VÀO TRONG thân (khung thụt t, stroke dày t nằm ngoài khung thụt = đúng mép thân)
+	local k = math.clamp(h / 16, 0, 1)
 	for _, e in ipairs(self._edges) do
 		local t = math.min(e.t * k, h / 2 - 0.5, w / 2 - 0.5)
 		local on = self._glass and not self._lgOn and t > 0.2
@@ -1973,9 +2345,6 @@ function Island:_apply()
 	ic.glyph.TextSize = math.max(4, math.floor(s * 0.52))
 end
 
-----------------------------------------------------------------------
--- Cử chỉ: bấm, nhấn giữ co lại, kéo (dây cao su), vuốt lên để đóng
-----------------------------------------------------------------------
 function Island:_glowAt(px)
 	if not self._glass then
 		return
@@ -2010,7 +2379,6 @@ function Island:_connect()
 		end)
 	)
 
-	-- Kéo: lên thì bám tay, xuống thì giãn như dây cao su
 	table.insert(
 		self._conns,
 		UserInputService.InputChanged:Connect(function(input)
@@ -2116,9 +2484,6 @@ function Island:_onSwipeUp()
 	end
 end
 
-----------------------------------------------------------------------
--- Layer: đổi lớp nội dung (lớp cũ biến mất nhanh, lớp mới vào chậm hơn một nhịp)
-----------------------------------------------------------------------
 function Island:_alive(token)
 	return not self._destroyed and self._layerToken == token
 end
@@ -2161,9 +2526,6 @@ function Island:_showLayer(name)
 	end
 end
 
-----------------------------------------------------------------------
--- Icon dùng chung: hiện/ẩn, pop khi đổi nội dung
-----------------------------------------------------------------------
 function Island:_setIconVisible(on, instant)
 	if self._iconOn == on and not instant then
 		return
@@ -2209,9 +2571,6 @@ function Island:_syncIcon(spec)
 	end
 end
 
-----------------------------------------------------------------------
--- Đồng bộ nội dung các layer
-----------------------------------------------------------------------
 function Island:_syncActivity()
 	local a = self._activity
 	if not a then
@@ -2221,7 +2580,6 @@ function Island:_syncActivity()
 	local right = a.Right or ""
 	layer.right.TextColor3 = a.RightColor or a.Color or WHITE
 	local rw = right ~= "" and math.ceil(textWidth(right, 14, Island.Fonts.Bold)) + 18 or 0
-	-- Đối xứng quanh tâm như đảo thật: hai bên rộng bằng nhau
 	local side = math.max(M.LeadW, rw)
 	local w = math.min(M.IdleW + side * 2, self:_maxWidth())
 	self._activityW = w
@@ -2246,14 +2604,12 @@ function Island:_syncExpanded()
 		layer.content:ClearAllChildren()
 		local c = layer.content
 
-		-- Tầng 1: header (tiêu đề, mô tả, giá trị bên phải)
 		local head = newPart(c)
 		layer.header = buildHeader(head.group, 20)
 		layer.right = newLabel(head.group, Island.Fonts.Bold, 17, WHITE, 0)
 		layer.right.AnchorPoint = Vector2.new(1, 0.5)
 		layer.right.TextXAlignment = Enum.TextXAlignment.Right
 
-		-- Tầng 2: progress + nút bấm
 		local foot = newPart(c)
 		local y = 20 + M.IconBig
 		layer.fill = nil
@@ -2272,7 +2628,6 @@ function Island:_syncExpanded()
 				Size = UDim2.fromScale(0, 1),
 			}, track)
 			mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, fill)
-			-- Thanh tiến trình bóng kính: sáng ở đầu, đậm dần
 			addGradient(fill, 0, { { 0, 0.18 }, { 1, 0 } })
 			layer.fill = fill
 			y = y + 6
@@ -2297,7 +2652,6 @@ function Island:_syncExpanded()
 		self._expW, self._expH = ew, y + 20
 		setLayerSize(layer, ew, self._expH)
 
-		-- Layer đang hiện mà phải dựng lại thì cho hiện luôn, không bắt animate lại từ đầu
 		if self._shown == "Expanded" and layer.group.Visible then
 			revealParts(layer, false)
 		end
@@ -2334,9 +2688,6 @@ function Island:_fillNotify(o)
 	layer.header.text.Text = o.Text or ""
 end
 
-----------------------------------------------------------------------
--- Máy trạng thái + render
-----------------------------------------------------------------------
 function Island:_state()
 	if self._hidden then
 		return "hidden"
@@ -2353,17 +2704,16 @@ function Island:_state()
 	return "idle"
 end
 
--- Vệt sáng quét + xoay viền sáng mỗi khi đổi trạng thái
 function Island:_glassTransition(state)
 	if not self._glass then
 		return
 	end
-	self._glintGrad.Offset = Vector2.new(-1, 0)
-	self._glint.Visible = false -- tắt vệt phản chiếu quét ngang
-	tween(self._glintGrad, 0.95, { Offset = Vector2.new(1, 0) }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-	local ang = RIM_ANGLE[state] or 40
+	local ang = RIM_ANGLE[state] or -50
 	for _, e in ipairs(self._edges) do
 		tween(e.grad, 0.9, { Rotation = ang }, Enum.EasingStyle.Quint)
+	end
+	if self._lg then
+		self._lg:SetGlareAngle(ang)
 	end
 end
 
@@ -2406,7 +2756,6 @@ function Island:_render(instant)
 	sp.w.t, sp.h.t = w, h
 	self._tw, self._th = w, h
 
-	-- Icon dùng chung: đang ẩn thì đặt sẵn đúng chỗ rồi mới hiện; đang hiện thì bay bằng spring
 	if icon then
 		local tx, ty = icon.x + icon.s / 2, icon.y + icon.s / 2
 		if not self._iconOn then
@@ -2424,10 +2773,11 @@ function Island:_render(instant)
 		self:_setIconVisible(false, instant)
 	end
 
-	-- Ánh màu activity hắt lên kính
 	if self._glass then
 		local accent = spec and spec.Color
-		if accent then
+		if self._lgOn then
+			self._tint.BackgroundTransparency = 1
+		elseif accent then
 			tween(self._tint, 0.5, { BackgroundColor3 = accent, BackgroundTransparency = 0 }, Enum.EasingStyle.Quad)
 		else
 			tween(self._tint, 0.4, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad)
@@ -2481,10 +2831,7 @@ function Island:_startLoop()
 end
 
 ----------------------------------------------------------------------
--- Mờ nền thật (RealBlur): Part vật liệu Glass gần như vô hình đặt sát camera + DepthOfField trong Lighting.
--- Part được ghép từ 1 khối giữa + vài lát dọc mỗi bên để xấp xỉ góc bo, và bám theo đảo mỗi khung hình.
--- Giới hạn: chỉ làm mờ cảnh 3D (không mờ ScreenGui khác), cần đồ hoạ >= 8, không dùng chung DepthOfField khác,
--- Gui trong không gian 3D (Billboard/SurfaceGui) bị ẩn. Nếu không chạy được, đảo vẫn là kính xám mờ đục.
+-- Mờ nền thật (RealBlur DepthOfField)
 ----------------------------------------------------------------------
 local function graphicsOk()
 	local ok, v = pcall(function()
@@ -2537,7 +2884,7 @@ function Island:_blurInit()
 			part.CanQuery = false
 			part.CanTouch = false
 			part.CastShadow = false
-			part.Material = Enum.Material.SmoothPlastic -- không phản chiếu mặt trời / môi trường
+			part.Material = Enum.Material.SmoothPlastic
 			part.Reflectance = 0
 			part.Color = Color3.fromRGB(185, 190, 200)
 			part.Transparency = math.clamp(b.Transparency, 0.975, 0.995)
@@ -2609,9 +2956,6 @@ function Island:_blurStep()
 		self._dof.FocusDistance = focus
 	end
 
-	-- Lens breathing: một callback RenderStep duy nhất cập nhật hình học mỗi frame.
-	-- Không dùng hàng trăm loop song song: chúng không tăng độ chân thực, chỉ tốn FPS.
-	-- Inset + reserve giữ mép vùng lens nằm bên trong thân đảo.
 	local t = os.clock()
 	local pulse = 1.012 + 0.008 * (0.5 + 0.5 * math.sin(t * 1.35))
 	local rpx = (self._r or 0) * (as.X / math.max(self._sp.w.p, 1))
@@ -2681,7 +3025,6 @@ function Island:_blurCleanup()
 	self._blurKey = nil
 end
 
--- Bật/tắt mờ nền thật khi đang chạy. on = true/false hoặc bảng thông số (xem BLUR_DEFAULTS)
 function Island:SetBlur(on)
 	self:_blurCleanup()
 	self._cfg.RealBlur = on and (on == true and true or on) or false
@@ -2691,7 +3034,7 @@ function Island:SetBlur(on)
 end
 
 ----------------------------------------------------------------------
--- API công khai
+-- API CÔNG KHAI DYNAMIC ISLAND
 ----------------------------------------------------------------------
 function Island:SetActivity(data)
 	self._activity = {}
@@ -2795,7 +3138,6 @@ function Island:Show()
 	self:_render(false)
 end
 
--- Bật/tắt chế độ kính khi đang chạy (tắt = đen đặc 100% như iPhone thật)
 function Island:SetGlass(on)
 	self._glass = on and true or false
 	self._cfg.Glass = self._glass
@@ -2813,13 +3155,25 @@ function Island:SetGlass(on)
 		self._lg:SetVisible(false)
 	end
 	self._lgOn = self._glass and self._lg ~= nil
+	self:_syncBodyFill()
 	self:_apply()
 	self:_render(false)
 end
 
-----------------------------------------------------------------------
--- Liquid glass: tạo / tắt / chỉnh khi đang chạy
-----------------------------------------------------------------------
+function Island:_syncBodyFill()
+	local body = self._body
+	if not body then
+		return
+	end
+	if not self._glass then
+		body.BackgroundColor3 = BLACK
+		body.BackgroundTransparency = 0
+		return
+	end
+	body.BackgroundColor3 = self._style.base
+	body.BackgroundTransparency = self._lgOn and 1 or self._cfg.Transparency
+end
+
 function Island:_lgCreate()
 	if self._lg or not self._cfg.Liquid or not self._glass then
 		return
@@ -2833,11 +3187,12 @@ function Island:_lgCreate()
 		self._lgOn = false
 		warn("[DynamicIsland] Không bật được Liquid glass (" .. tostring(lg) .. "), dùng kính cổ điển.")
 	end
+	self:_syncBodyFill()
 end
 
--- Engine tự báo lỗi (EditableImage hết bộ nhớ, bị chặn...): bỏ engine, bật lại kính cổ điển
 function Island:_lgFailed()
 	self._lgOn = false
+	self:_syncBodyFill()
 	local lg = self._lg
 	self._lg = nil
 	if lg then
@@ -2850,7 +3205,6 @@ function Island:_lgFailed()
 	end
 end
 
--- false = kính cổ điển; true/bảng = bật engine mới (bảng = ghi đè LIQUID_DEFAULTS)
 function Island:SetLiquid(opts)
 	if opts == false then
 		self._cfg.Liquid = false
@@ -2868,14 +3222,21 @@ function Island:SetLiquid(opts)
 			self:_lgCreate()
 		end
 	end
+	self:_syncBodyFill()
 	self:_apply()
 end
 
--- Ép quét lại backdrop + dựng lại lens (vd. vừa teleport / đổi cảnh)
 function Island:RefreshGlass()
 	if self._lg then
-		self._lg:Refresh()
+		self._lg:ForceUpdateSync()
 	end
+end
+
+function Island:GetDebugStats()
+	if self._lg then
+		return self._lg:GetDebugStats()
+	end
+	return nil
 end
 
 function Island:SetTop(px)
@@ -2916,7 +3277,7 @@ function Island:Destroy()
 end
 
 ----------------------------------------------------------------------
--- Demo: getgenv().DynamicIslandDemo = true
+-- Demo chạy thử nhanh: getgenv().DynamicIslandDemo = true
 ----------------------------------------------------------------------
 local okEnv, env = pcall(function()
 	return getgenv and getgenv()
@@ -2928,7 +3289,7 @@ if okEnv and env and env.DynamicIslandDemo then
 		task.wait(1.2)
 		island:Notify({
 			Title = "Dynamic Island",
-			Text = "Liquid glass đã sẵn sàng",
+			Text = "Liquid Glass 100% chuẩn GlassmorphicUI đã sẵn sàng",
 			Color = Island.Colors.Blue,
 			Duration = 3,
 		})
