@@ -1,15 +1,16 @@
 --[[
-	DynamicIsland.lua v6.1 — Dynamic Island (iPhone 14 Pro) + Engine LIQUID GLASS
+	DynamicIsland.lua v6.1.1 — Dynamic Island (iPhone 14 Pro) + Engine LIQUID GLASS
 	Chuẩn toán học boatbomber / boatbeaker (GlassmorphicUI 1.0.0) — Bản REAL-TIME 1:1 SYNC
 	-----------------------------------------------------------------------------------------
-	CẬP NHẬT Ở v6.1 ( Sửa triệt để lỗi trễ ảnh nền / không khớp chuyển động khung hình ):
-	1. Đồng bộ trực tiếp vào RenderStep ngay sau Camera (Enum.RenderPriority.Camera.Value + 1):
+	CẬP NHẬT Ở v6.1.1:
+	1. Sửa lỗi cú pháp `self:_blurInit()` ở hàm khởi tạo `Island.new`.
+	2. Đồng bộ trực tiếp vào RenderStep ngay sau Camera (Enum.RenderPriority.Camera.Value + 1):
 	   Spring vật lý + RealBlur + Liquid GlassPane chạy trong CÙNG MỘT FRAME với góc quay Camera.
-	2. Xóa bỏ độ trễ tích lũy (Temporal Ghosting): mặc định TemporalBlend = 1.0 (cập nhật 100%
+	3. Xóa bỏ độ trễ tích lũy (Temporal Ghosting): mặc định TemporalBlend = 1.0 (cập nhật 100%
 	   màu thực của frame hiện tại, không giữ bóng mờ của frame cũ).
-	3. Xóa bỏ độ trễ 1 frame của pendingWrite & xóa bỏ settleWait: quét toàn bộ lưới + tái dựng
+	4. Xóa bỏ độ trễ 1 frame của pendingWrite & xóa bỏ settleWait: quét toàn bộ lưới + tái dựng
 	   Catmull-Rom + Frost Blur + Rim Light + WritePixelsBuffer hoàn tất ngay trong 1 frame.
-	4. Đóng băng sẵn kênh Alpha làm mờ (invBlurA) trong giai đoạn Bake Geometry và dùng cửa sổ
+	5. Đóng băng sẵn kênh Alpha làm mờ (invBlurA) trong giai đoạn Bake Geometry và dùng cửa sổ
 	   trượt biên phân số (Fractional-Edge Sliding Box Blur), giảm >60% tải CPU.
 ]]
 
@@ -602,28 +603,7 @@ local function evalProfile(D, N, u)
 end
 
 -- Box blur 1 trục có hỗ trợ bán kính thực (Fractional-Edge Sliding Window):
--- Kết hợp phần nguyên rInt và hai điểm rìa phân số frac chỉ trong 1 lượt quét duy nhất!
-local function boxBlurFractional1D(src, dst, lines, len, rFloat)
-	if rFloat < 0.25 then
-		for i = 1, #src do
-			dst[i] = src[i]
-		end
-		return
-	end
-	local rInt = floor(rFloat)
-	local frac = rFloat - rInt
-	local inv = 1 / (2 * rInt + 1 + 2 * frac)
-	local last = len - 1
-	local rPlus1 = rInt + 1
-
-	for line = 0, lines - 1 do
-		local base = line * len + 1
-		-- Lưu ý: hàm này dùng cho mảng theo hàng hoặc sau khi chuyển vị; để tổng quát ta dùng stepA/stepB bên dưới
-		local _ = base
-		break
-	end
-end
-
+-- Kết hợp phần nguyên rInt và hai điểm rìa phân số frac chỉ trong 1 lượt quét duy nhất.
 local function blurAxisFractional(src, dst, lines, len, rFloat, stepA, stepB)
 	if rFloat < 0.25 then
 		for i = 1, #src do
@@ -777,7 +757,7 @@ local function bakeGeometry(G)
 		end
 	end
 
-	-- Đóng băng trước kênh Alpha sau làm mờ (invBlurA) để không phải làm mờ kênh A ở mỗi frame!
+	-- Đóng băng trước kênh Alpha sau làm mờ (invBlurA)
 	local blurPx = max(G.BlurRadius or 1, 1)
 	local sigmaOut = (blurPx / 3) / max(0.5 * (stepX + stepY), 1)
 	local rFloat = clampN(sigmaOut * 1.4, 0, min(LW, LH) * 0.35)
@@ -904,7 +884,6 @@ local function reconstructFrostAndLightFast(job, scratch)
 	local tintMix = clampN(job.tintMix or 0, 0, 1)
 	local paneAlpha = clampN(job.paneAlpha or 1, 0, 1)
 
-	-- Tái sử dụng mảng bộ nhớ đệm (scratch buffers) để không cấp phát rác GC mỗi frame
 	local pR = scratch.pR
 	local pG = scratch.pG
 	local pB = scratch.pB
@@ -1225,7 +1204,6 @@ function Liquid:_fail(reason)
 	end
 end
 
--- Lượng tử hóa nhẹ kích thước (bước 2px) khi đang co giãn để tận dụng tối đa Geometry Cache
 function Liquid:_resolveSpec()
 	local sh = self.shape
 	local W = max(floor(sh.w / 2 + 0.5) * 2, 4)
@@ -1291,7 +1269,6 @@ end
 -- LẤY MẪU MÀN HÌNH TỨC THÌ (FULL-GRID SINGLE-FRAME PASS)
 ----------------------------------------------------------------------
 function Liquid:_ensureGrid(W, H)
-	-- Lưới gọn vừa đủ cho nội suy Catmull-Rom 16-tap để quét trọn vẹn 100% ô ngay trong 1 frame
 	local gw = clampN(ceil(W / 10), 8, 34)
 	local gh = clampN(ceil(H / 10), 4, 18)
 	local beta = clampN(self.P.SamplerWarp or 0.45, 0, 0.85)
@@ -1483,15 +1460,14 @@ function Liquid:_sampleFullGrid(spec)
 		return false
 	end
 
-	-- Tính tọa độ màn hình chính xác ngay cả trước khi Roblox cập nhật AbsolutePosition
 	local sx0, sy0, sW, sH
 	if self.isl and self.isl._sp then
-		local scale = self.isl._scale.Scale
+		local scale = self.isl._scale.Scale * self.isl._pressScale.Scale
 		local vp = cam.ViewportSize
 		sW = self.isl._sp.w.p * scale
 		sH = self.isl._sp.h.p * scale
 		sx0 = vp.X * 0.5 - sW * 0.5
-		sy0 = (self.isl._cfg.Top + self.isl._sp.oy.p) * scale
+		sy0 = self.isl._cfg.Top + self.isl._sp.oy.p * self.isl._scale.Scale
 	else
 		local ap, sz = self.body.AbsolutePosition, self.body.AbsoluteSize
 		sx0, sy0, sW, sH = ap.X, ap.Y, sz.X, sz.Y
@@ -1505,7 +1481,17 @@ function Liquid:_sampleFullGrid(spec)
 		self.sky = self:_skySnapshot()
 		self.lastSkyTime = now
 	end
-	self.rayParams = self.rayParams or RaycastParams.new()
+	if not self.rayParams then
+		local rp = RaycastParams.new()
+		rp.FilterType = Enum.RaycastFilterType.Exclude
+		self.rayParams = rp
+	end
+	local filter = { cam }
+	local lp = Players.LocalPlayer
+	if lp and lp.Character then
+		filter[2] = lp.Character
+	end
+	self.rayParams.FilterDescendantsInstances = filter
 
 	local gw, gh = self.gw, self.gh
 	local blendK = self.gridFresh and 1 or clampN(P.TemporalBlend or 1.0, 0.1, 1.0)
@@ -1604,7 +1590,6 @@ function Liquid:ForceUpdateSync()
 	self:Step()
 end
 
--- Chạy đồng bộ trong cùng 1 frame ngay sau khi Camera cập nhật: Không trễ frame!
 function Liquid:Step()
 	if self.failed or self.destroyed or not self.enabled then
 		return
@@ -1656,7 +1641,7 @@ function Liquid:Step()
 		self.reconstructDirty = true
 	end
 
-	-- 3) Nếu cảnh nền hoặc hình học thay đổi -> Tái dựng + Frost Blur + Rim Light + Ghi EditableImage NGAY LẬP TỨC
+	-- 3) Tái dựng + Frost Blur + Rim Light + Ghi EditableImage NGAY LẬP TỨC trong cùng frame
 	if self.reconstructDirty and self.currentGeom then
 		self.executionPath = "sync"
 		local baseColor = (self.isl and self.isl._style and self.isl._style.base) or self.body.BackgroundColor3
@@ -2241,8 +2226,6 @@ function Island:_connect()
 		end)
 	)
 
-	-- Vòng lặp đồng bộ duy nhất ở RenderPriority.Camera.Value + 1:
-	-- 1) Bước nhảy lò xo (Spring) -> 2) Đặt vị trí Part RealBlur -> 3) Quét & Vẽ Liquid GlassPane
 	self._syncStepName = "DynamicIslandSync_" .. tostring(math.random(1, 10000000))
 	local lastClock = os.clock()
 	local function frameSync()
@@ -3088,7 +3071,7 @@ if okEnv and env and env.DynamicIslandDemo then
 		task.wait(1.2)
 		island:Notify({
 			Title = "Dynamic Island",
-			Text = "Liquid Glass 6.1 Real-Time Sync đã sẵn sàng",
+			Text = "Liquid Glass 6.1.1 Real-Time Sync đã sẵn sàng",
 			Color = Island.Colors.Blue,
 			Duration = 3,
 		})
