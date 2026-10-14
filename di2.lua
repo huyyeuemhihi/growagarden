@@ -1,10 +1,12 @@
 --[[
-	DynamicIsland.lua v6.2 — Default iOS Black Edition + Blinking Green Dot
+	DynamicIsland.lua v6.3 — Default iOS Black Edition + Smart Green Dot
 	-----------------------------------------------------------------------------------------
 	• Nền đen đặc 100% (#000000) chuẩn Dynamic Island mặc định trên iPhone 14/15/16 Pro.
-	• Loại bỏ hoàn toàn Liquid Glass & RealBlur -> 0 độ trễ, siêu nhẹ, mượt tối đa theo FPS.
-	• Tích hợp dấu chấm xanh lá nhấp nháy (iOS Privacy/Active Green Indicator) ở bên trái đảo,
-	  tự động trượt mượt theo lò xo (Spring) qua các trạng thái Idle / Compact / Expanded.
+	• Chấm xanh lá nhấp nháy (Privacy Indicator) CHỈ hiện khi đảo ở trạng thái thu nhỏ
+	  (Idle / Compact). Khi phóng to (Expanded) hoặc hiện thông báo (Notify) thì chấm
+	  co lại + trượt vào trong + mờ dần (giống iOS), khi thu nhỏ lại thì "bật" ra bằng lò xo
+	  sau khi đảo gần thu xong.
+	• Chấm có 2 lớp: nhân (core) nhấp nháy mượt + vòng sóng (ripple) lan tỏa rồi tan.
 ]]
 
 local Players = game:GetService("Players")
@@ -53,10 +55,16 @@ local HEADER_X = M.Margin + M.IconBig + 12
 local ICON_BIG = { x = M.Margin, y = 20, s = M.IconBig, r = 0.24 }
 local ICON_SMALL = { x = 12, y = (M.IdleH - M.IconSmall) / 2, s = M.IconSmall, r = 0.5 }
 
--- Tọa độ của dấu chấm xanh nhấp nháy ở từng trạng thái (bám bên trái)
+-- Tọa độ chấm xanh (chỉ có 2 vị trí vì chấm ẩn khi phóng to)
 local DOT_IDLE = { x = 18, y = M.IdleH / 2 }
 local DOT_COMPACT = { x = 12 + M.IconSmall + 10, y = M.IdleH / 2 }
-local DOT_EXPANDED = { x = HEADER_X + 5, y = 31 }
+local DOT_SLIDE = 7 -- px chấm trượt vào trong khi ẩn
+
+-- Lò xo hiện / ẩn của chấm xanh
+local DOT_SHOW = { 0.50, 0.58 } -- bật ra, hơi nảy (overshoot) như iOS
+local DOT_HIDE = { 0.20, 1.00 } -- co nhanh, không nảy
+local DOT_DELAY_SHOW = 0.20 -- chờ đảo thu gần xong rồi mới hiện lại
+local DOT_DELAY_INTRO = 0.35
 
 local SPRING_OPEN = { w = { 0.46, 0.70 }, h = { 0.50, 0.74 }, icon = { 0.46, 0.72 } }
 local SPRING_CLOSE = { w = { 0.40, 0.80 }, h = { 0.42, 0.82 }, icon = { 0.40, 0.84 } }
@@ -248,17 +256,18 @@ local function newBlinkDot(parent, color)
 		Size = UDim2.fromOffset(18, 18),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
+		Visible = false,
 		ZIndex = 5,
 	}, parent)
 
-	-- Quầng sáng lan tỏa bên ngoài (Halo)
+	-- Vòng sóng lan tỏa bên ngoài (Ripple)
 	local halo = mk("Frame", {
 		Name = "Halo",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(16, 16),
 		BackgroundColor3 = color,
-		BackgroundTransparency = 0.72,
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, holder)
 	mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, halo)
@@ -271,11 +280,11 @@ local function newBlinkDot(parent, color)
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(7, 7),
 		BackgroundColor3 = color,
-		BackgroundTransparency = 0,
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, holder)
 	mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, core)
-	local coreScale = mk("UIScale", { Scale = 1 }, core)
+	local coreScale = mk("UIScale", { Scale = 0 }, core)
 
 	return {
 		holder = holder,
@@ -403,16 +412,15 @@ local function revealParts(layer, animate, token, isAlive)
 	end
 end
 
--- Tiêu đề dịch sang phải 14px để nhường chỗ cho chấm xanh nhấp nháy bên trái
-local function buildHeader(parent, y, dotOffset)
-	local x0 = HEADER_X + (dotOffset or 14)
+-- Header (Expanded/Notify): chấm xanh đã ẩn nên không cần nhường chỗ nữa
+local function buildHeader(parent, y)
 	local title = newLabel(parent, Island.Fonts.Bold, 15, WHITE, 0)
-	title.Position = UDim2.fromOffset(x0, y + 1)
+	title.Position = UDim2.fromOffset(HEADER_X, y + 1)
 	title.Size = UDim2.fromOffset(100, 20)
 	local text = newLabel(parent, Island.Fonts.Regular, 13, WHITE, 0.42)
 	text.Position = UDim2.fromOffset(HEADER_X, y + 23)
 	text.Size = UDim2.fromOffset(100, 18)
-	return { title = title, text = text, titlePos = title.Position, textPos = text.Position, titleX = x0 }
+	return { title = title, text = text, titlePos = title.Position, textPos = text.Position, titleX = HEADER_X }
 end
 
 local function newButton(parent, spec, accent, size, position)
@@ -478,7 +486,7 @@ Island.GlassmorphicUI = {
 }
 
 ----------------------------------------------------------------------
--- KHỞI TẠO & VẬN HÀNH DYNAMIC ISLAND (SOLID BLACK + BLINKING GREEN DOT)
+-- KHỞI TẠO & VẬN HÀNH DYNAMIC ISLAND
 ----------------------------------------------------------------------
 function Island.new(config)
 	config = config or {}
@@ -508,6 +516,8 @@ function Island.new(config)
 	self._notify = nil
 	self._destroyed = false
 	self._expSig = nil
+	self._dotWant = nil
+	self._dotToken = 0
 	self._activityW = M.IdleW + M.LeadW * 2
 	self._expW, self._expH = M.ExpandedW, M.BannerH
 
@@ -596,7 +606,6 @@ function Island:_build()
 
 	-- Dấu chấm xanh lá nhấp nháy bên trái
 	self._dot = newBlinkDot(body, self._cfg.DotColor)
-	self._dot.holder.Visible = self._cfg.Dot
 
 	-- Layer Activity (compact)
 	local act = newLayer(body, "Activity")
@@ -609,7 +618,7 @@ function Island:_build()
 	-- Layer Notify (banner)
 	local nt = newLayer(body, "Notify")
 	self._layers.Notify = nt
-	nt.header = buildHeader(nt.content, 20, self._cfg.Dot and 14 or 0)
+	nt.header = buildHeader(nt.content, 20)
 
 	-- Layer Expanded
 	self._layers.Expanded = newLayer(body, "Expanded")
@@ -630,12 +639,13 @@ function Island:_build()
 		ir = Spring.new(ICON_SMALL.r, SPRING_OPEN.icon[1], SPRING_OPEN.icon[2], 0.0005),
 		dx = Spring.new(DOT_IDLE.x, SPRING_OPEN.icon[1], SPRING_OPEN.icon[2]),
 		dy = Spring.new(DOT_IDLE.y, SPRING_OPEN.icon[1], SPRING_OPEN.icon[2]),
+		dv = Spring.new(0, DOT_SHOW[1], DOT_SHOW[2], 0.002), -- độ hiện của chấm (0 = ẩn, 1 = hiện)
 		oy = Spring.new(0, 0.28, 0.82),
 	}
 	self._springs = {
 		self._sp.w, self._sp.h,
 		self._sp.ix, self._sp.iy, self._sp.is, self._sp.ir,
-		self._sp.dx, self._sp.dy,
+		self._sp.dx, self._sp.dy, self._sp.dv,
 		self._sp.oy,
 	}
 	self._tw, self._th = w0, h0
@@ -653,9 +663,10 @@ function Island:_apply()
 	self._shell.Position = UDim2.fromOffset(0, sp.oy.p)
 	self._bodyCorner.CornerRadius = UDim.new(0, r)
 
-	-- Cập nhật vị trí chấm xanh bên trái
+	-- Vị trí chấm xanh: bám mép trái, trượt nhẹ vào trong khi đang ẩn
 	if self._dot then
-		self._dot.holder.Position = UDim2.fromOffset(sp.dx.p, sp.dy.p)
+		local slide = DOT_SLIDE * (1 - sp.dv.p)
+		self._dot.holder.Position = UDim2.fromOffset(sp.dx.p - slide, sp.dy.p)
 	end
 
 	-- Cập nhật vị trí & kích thước Icon
@@ -665,6 +676,36 @@ function Island:_apply()
 	ic.group.Size = UDim2.fromOffset(s, s)
 	ic.corner.CornerRadius = UDim.new(math.clamp(sp.ir.p, 0, 0.5), 0)
 	ic.glyph.TextSize = math.max(4, math.floor(s * 0.52))
+end
+
+-- Nhấp nháy + ripple + hiện/ẩn theo lò xo dv
+function Island:_updateDot(now)
+	local dot = self._dot
+	if not dot then
+		return
+	end
+	local dv = math.max(self._sp.dv.p, 0)
+	if not self._cfg.Dot or self._hidden or dv < 0.01 then
+		dot.holder.Visible = false
+		return
+	end
+	dot.holder.Visible = true
+
+	local a = math.clamp(dv, 0, 1) -- độ mờ không vượt quá 1
+	local t = now * (self._cfg.DotSpeed or 2.8)
+	local pulse = 0.5 + 0.5 * math.sin(t)
+
+	-- Nhân: nhấp nháy mượt, co giãn nhẹ
+	local coreAlpha = 1 - 0.62 * (1 - pulse)
+	dot.core.BackgroundTransparency = 1 - coreAlpha * a
+	dot.coreScale.Scale = (0.84 + 0.18 * pulse) * dv
+
+	-- Vòng sóng: lan ra rồi tan dần
+	local phase = (t / (2 * math.pi)) % 1
+	local eased = 1 - (1 - phase) ^ 2
+	local haloAlpha = 0.55 * (1 - phase) ^ 1.5
+	dot.halo.BackgroundTransparency = 1 - haloAlpha * a
+	dot.haloScale.Scale = (0.7 + 0.9 * eased) * dv
 end
 
 function Island:_connect()
@@ -732,7 +773,7 @@ function Island:_connect()
 		end)
 	)
 
-	-- Vòng lặp cập nhật lò xo và hiệu ứng nhấp nháy của chấm xanh bên trái
+	-- Vòng lặp cập nhật lò xo và hiệu ứng chấm xanh
 	local lastClock = os.clock()
 	table.insert(
 		self._conns,
@@ -765,14 +806,8 @@ function Island:_connect()
 				end
 			end
 
-			-- Hiệu ứng nhấp nháy (Pulse & Blink) cho dấu chấm xanh bên trái
-			if self._cfg.Dot and not self._hidden and self._gui.Enabled then
-				local dot = self._dot
-				local pulse = 0.5 + 0.5 * math.sin(now * (self._cfg.DotSpeed or 2.8))
-				dot.core.BackgroundTransparency = 0.62 * (1 - pulse)
-				dot.coreScale.Scale = 0.84 + 0.18 * pulse
-				dot.halo.BackgroundTransparency = 0.94 - 0.34 * pulse
-				dot.haloScale.Scale = 0.75 + 0.40 * pulse
+			if self._gui.Enabled then
+				self:_updateDot(now)
 			end
 		end)
 	)
@@ -913,7 +948,8 @@ function Island:_syncActivity()
 	local right = a.Right or ""
 	layer.right.TextColor3 = a.RightColor or a.Color or WHITE
 	local rw = right ~= "" and math.ceil(textWidth(right, 14, Island.Fonts.Bold)) + 18 or 0
-	local leftNeed = self._cfg.Dot and (M.LeadW + 16) or M.LeadW
+	-- Bên trái cần chỗ cho icon nhỏ + chấm xanh (chỉ ở trạng thái thu nhỏ)
+	local leftNeed = self._cfg.Dot and (M.LeadW + 24) or M.LeadW
 	local side = math.max(leftNeed, rw)
 	local w = math.min(M.IdleW + side * 2, self:_maxWidth())
 	self._activityW = w
@@ -931,8 +967,7 @@ function Island:_syncExpanded()
 	local ew = math.min(M.ExpandedW, self:_maxWidth())
 	local hasProgress = a.Progress ~= nil
 	local buttons = (a.Buttons and #a.Buttons > 0) and a.Buttons or nil
-	local dotShift = self._cfg.Dot and 14 or 0
-	local sig = table.concat({ tostring(ew), tostring(hasProgress), tostring(buttons and #buttons or 0), tostring(dotShift) }, "|")
+	local sig = table.concat({ tostring(ew), tostring(hasProgress), tostring(buttons and #buttons or 0) }, "|")
 
 	if sig ~= self._expSig then
 		self._expSig = sig
@@ -940,7 +975,7 @@ function Island:_syncExpanded()
 		local c = layer.content
 
 		local head = newPart(c)
-		layer.header = buildHeader(head.group, 20, dotShift)
+		layer.header = buildHeader(head.group, 20)
 		layer.right = newLabel(head.group, Island.Fonts.Bold, 17, WHITE, 0)
 		layer.right.AnchorPoint = Vector2.new(1, 0.5)
 		layer.right.TextXAlignment = Enum.TextXAlignment.Right
@@ -999,9 +1034,9 @@ function Island:_syncExpanded()
 	layer.right.TextColor3 = a.RightColor or a.Color or WHITE
 	rollText(layer.right, right, rightPos, 0)
 
-	local tw = math.max(20, ew - HEADER_X - dotShift - M.Margin - (rw > 0 and rw + 10 or 0))
+	local tw = math.max(20, ew - HEADER_X - M.Margin - (rw > 0 and rw + 10 or 0))
 	layer.header.title.Size = UDim2.fromOffset(tw, 20)
-	layer.header.text.Size = UDim2.fromOffset(tw + dotShift, 18)
+	layer.header.text.Size = UDim2.fromOffset(tw, 18)
 	rollText(layer.header.title, a.Title or "Activity", layer.header.titlePos, 0)
 	rollText(layer.header.text, a.Text or "", layer.header.textPos, 0.42)
 
@@ -1016,11 +1051,10 @@ function Island:_fillNotify(o)
 	local layer = self._layers.Notify
 	local w = math.min(o.Width or M.BannerW, self:_maxWidth())
 	setLayerSize(layer, w, M.BannerH)
-	local dotShift = self._cfg.Dot and 14 or 0
-	local tw = math.max(20, w - HEADER_X - dotShift - M.Margin)
-	layer.header.title.Position = UDim2.fromOffset(HEADER_X + dotShift, 21)
+	local tw = math.max(20, w - HEADER_X - M.Margin)
+	layer.header.title.Position = UDim2.fromOffset(HEADER_X, 21)
 	layer.header.title.Size = UDim2.fromOffset(tw, 20)
-	layer.header.text.Size = UDim2.fromOffset(tw + dotShift, 18)
+	layer.header.text.Size = UDim2.fromOffset(tw, 18)
 	layer.header.title.Text = o.Title or ""
 	layer.header.text.Text = o.Text or ""
 end
@@ -1041,6 +1075,40 @@ function Island:_state()
 	return "idle"
 end
 
+-- Điều khiển hiện / ẩn chấm xanh theo trạng thái đảo
+function Island:_setDotWanted(want, instant)
+	if self._dotWant == want and not instant then
+		return
+	end
+	local first = (self._dotWant == nil)
+	self._dotWant = want
+	self._dotToken = self._dotToken + 1
+	local token = self._dotToken
+	local dv = self._sp.dv
+
+	if want then
+		dv:SetParams(DOT_SHOW[1], DOT_SHOW[2])
+		if instant then
+			dv.t = 1
+			return
+		end
+		-- Đợi đảo thu gần xong rồi chấm mới "bật" ra bằng lò xo
+		local delay = first and self._cfg.Intro and DOT_DELAY_INTRO or DOT_DELAY_SHOW
+		task.delay(delay, function()
+			if self._destroyed or self._dotToken ~= token then
+				return
+			end
+			dv:SetParams(DOT_SHOW[1], DOT_SHOW[2])
+			dv.t = 1
+			self._animating = true
+		end)
+	else
+		-- Đảo phóng to: chấm co lại ngay, không nảy
+		dv:SetParams(DOT_HIDE[1], DOT_HIDE[2])
+		dv.t = 0
+	end
+end
+
 function Island:_render(instant)
 	if self._destroyed then
 		return
@@ -1048,7 +1116,6 @@ function Island:_render(instant)
 	local state = self:_state()
 	local w, h, layerName = M.IdleW, M.IdleH, nil
 	local spec, icon = nil, nil
-	local dotTarget = DOT_IDLE
 
 	if state == "hidden" then
 		w, h = 0, 0
@@ -1056,25 +1123,23 @@ function Island:_render(instant)
 		local layer = self._layers.Notify
 		w, h, layerName = layer.w, M.BannerH, "Notify"
 		spec, icon = self._notify, ICON_BIG
-		dotTarget = DOT_EXPANDED
 	elseif state == "expanded" then
 		self:_syncExpanded()
 		w, h, layerName = self._expW, self._expH, "Expanded"
 		spec, icon = self._activity, ICON_BIG
-		dotTarget = DOT_EXPANDED
 	elseif state == "activity" then
 		self:_syncActivity()
 		w, h, layerName = self._activityW, M.IdleH, "Activity"
 		spec, icon = self._activity, ICON_SMALL
-		dotTarget = DOT_COMPACT
 	end
 
 	if state ~= "hidden" then
 		self._gui.Enabled = true
 	end
-	if self._dot then
-		self._dot.holder.Visible = self._cfg.Dot and (state ~= "hidden")
-	end
+
+	-- Chấm chỉ hiện ở Idle / Compact; vị trí luôn là vị trí thu nhỏ
+	local dotTarget = self._activity and DOT_COMPACT or DOT_IDLE
+	self:_setDotWanted(self._cfg.Dot and (state == "idle" or state == "activity"), instant)
 
 	local sp = self._sp
 	local grow = (w * h) > (self._tw * self._th)
@@ -1222,7 +1287,7 @@ function Island:Show()
 	self:_render(false)
 end
 
--- Bật/tắt hoặc đổi màu dấu chấm nhấp nháy bên trái khi đang chạy
+-- Bật/tắt hoặc đổi màu chấm nhấp nháy khi đang chạy
 function Island:SetDot(on, color)
 	self._cfg.Dot = on ~= false
 	if color then
@@ -1230,9 +1295,13 @@ function Island:SetDot(on, color)
 		self._dot.core.BackgroundColor3 = color
 		self._dot.halo.BackgroundColor3 = color
 	end
-	self._dot.holder.Visible = self._cfg.Dot and not self._hidden
 	self._expSig = nil
 	self:_render(false)
+end
+
+-- Đổi tốc độ nhấp nháy (mặc định 2.8)
+function Island:SetDotSpeed(speed)
+	self._cfg.DotSpeed = speed or 2.8
 end
 
 -- Các hàm giữ lại để tương thích ngược (No-op)
@@ -1283,7 +1352,7 @@ if okEnv and env and env.DynamicIslandDemo then
 		task.wait(1.2)
 		island:Notify({
 			Title = "Dynamic Island",
-			Text = "Nền đen mặc định + chấm xanh nhấp nháy đã sẵn sàng",
+			Text = "Chấm xanh ẩn khi phóng to, hiện lại khi thu nhỏ",
 			Color = Island.Colors.Green,
 			Duration = 3,
 		})
